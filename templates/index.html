@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>智能果蔬助手</title>
     <style>
         body {
@@ -9,67 +11,108 @@
             flex-direction: column;
             align-items: center;
             margin: 0;
-            padding: 20px;
+            padding: 10px; /* 调整手机上的边距 */
             background-color: #f4f7f6;
             color: #333;
+            min-height: 100vh; /* 确保body至少和视口一样高 */
+            box-sizing: border-box; /* 防止padding导致溢出 */
         }
         h1 {
             color: #4CAF50;
-            margin-bottom: 20px;
+            margin-top: 15px;
+            margin-bottom: 15px;
+            font-size: 1.8em; /* 调整标题大小 */
         }
         #chatContainer {
             width: 100%;
-            max-width: 600px;
+            max-width: 600px; /* 在大屏幕上限制最大宽度 */
             background-color: #fff;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             overflow: hidden;
+            display: flex; /* 使用flex布局使聊天框和输入区分开 */
+            flex-direction: column;
+            flex-grow: 1; /* 使聊天容器填满剩余空间 */
         }
         #chatbox {
-            height: 400px;
+            flex-grow: 1; /* 聊天框占据大部分空间 */
             overflow-y: auto;
-            padding: 20px;
+            padding: 15px;
             border-bottom: 1px solid #eee;
         }
         #chatbox p {
-            margin: 0 0 10px 0;
-            line-height: 1.6;
+            margin: 0 0 12px 0;
+            line-height: 1.5;
+            font-size: 0.95em;
         }
         #chatbox p b {
-            color: #4CAF50; /* AI的颜色可以不同，例如 #007bff */
+            color: #4CAF50;
         }
         #chatbox p.user-message b {
-            color: #007bff; /* 用户的颜色 */
+            color: #007bff;
         }
         #inputArea {
             display: flex;
-            padding: 15px;
-            border-top: 1px solid #eee; /* 在聊天框和输入区之间加一条线 */
+            padding: 10px;
+            background-color: #f9f9f9; /* 给输入区域一个轻微的背景色 */
         }
         #userInput {
             flex-grow: 1;
-            padding: 10px 15px;
+            padding: 12px 15px;
             border: 1px solid #ddd;
             border-radius: 20px;
-            margin-right: 10px;
-            font-size: 16px;
+            margin-right: 8px;
+            font-size: 1em;
         }
         #userInput:focus {
             outline: none;
             border-color: #4CAF50;
+            box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
         }
         button {
-            padding: 10px 20px;
+            padding: 12px 18px;
             background-color: #4CAF50;
             color: white;
             border: none;
             border-radius: 20px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 1em;
             transition: background-color 0.3s ease;
+            white-space: nowrap; /* 防止按钮文字换行 */
         }
         button:hover {
             background-color: #45a049;
+        }
+
+        /* 针对小屏幕的媒体查询 */
+        @media (max-width: 600px) {
+            body {
+                padding: 0; /* 手机上移除body的padding，让chatContainer占满 */
+            }
+            #chatContainer {
+                border-radius: 0; /* 手机上移除圆角，使其占满屏幕 */
+                height: 100vh; /* 确保在手机上占满整个视口高度 */
+                max-width: 100%;
+            }
+            h1 {
+                font-size: 1.5em;
+                margin-top: 10px;
+                margin-bottom: 10px;
+            }
+            #chatbox {
+                padding: 10px;
+            }
+            #inputArea {
+                padding: 8px;
+            }
+            #userInput {
+                padding: 10px 12px;
+                font-size: 0.95em;
+            }
+            button {
+                padding: 10px 15px;
+                font-size: 0.95em;
+            }
         }
     </style>
 </head>
