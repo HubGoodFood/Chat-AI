@@ -140,144 +140,128 @@ def chat():
     final_response = ""
 
     # 意图识别关键词
-    buy_keywords = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只"]
+    buy_intent_keywords = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只"] # 明确的购买意图
     price_query_keywords = ["多少钱", "价格是", "什么价", "价钱"]
-    what_do_you_sell_keywords = ["卖什么", "有什么产品", "商品列表", "菜单"]
+    what_do_you_sell_keywords = ["卖什么", "有什么产品", "商品列表", "菜单", "有哪些东西"]
+    recommend_keywords = ["推荐", "介绍点", "什么好吃", "什么值得买"]
 
-    # 检查是否是“卖什么”的请求
     is_what_do_you_sell_request = any(keyword in user_input_for_processing for keyword in what_do_you_sell_keywords)
+    is_recommend_request = any(keyword in user_input_for_processing for keyword in recommend_keywords)
 
+    # 1. 处理“你们卖什么东西”的请求
     if is_what_do_you_sell_request:
         if PRODUCT_CATALOG:
             response_parts = ["我们主要提供以下类别的生鲜和美食："]
-            # 简单分类或列举几个例子
-            # 这里可以根据你的产品特点做得更智能，例如按水果、蔬菜、肉类、熟食等分类
-            # 目前简单列举前几个作为示例
-            count = 0
-            categories = set()
-            example_items = []
+            categories = {}
             for key, details in PRODUCT_CATALOG.items():
-                # 尝试从产品名中提取类别 (非常粗略的示例)
-                if "鸡" in details['name'] or "鸭" in details['name']: categories.add("禽类")
-                elif "鱼" in details['name'] or "虾" in details['name'] or "螺" in details['name'] or "蛏" in details['name'] or "蛤" in details['name']: categories.add("海鲜河鲜")
-                elif "菜" in details['name'] or "瓜" in details['name'] or "菇" in details['name'] or "笋" in details['name'] or "姜" in details['name'] or "白" in details['name'] or "菠菜" in details['name'] or "花苔" in details['name'] or "萝卜" in details['name']: categories.add("新鲜蔬菜")
-                elif "果" in details['name'] or "莓" in details['name'] or "橙" in details['name'] or "桃" in details['name'] or "芒" in details['name'] or "龙眼" in details['name'] or "荔枝" in details['name'] or "凤梨" in details['name'] or "葡萄" in details['name'] or "石榴" in details['name'] or "山楂" in details['name'] or "芭乐" in details['name']: categories.add("时令水果")
-                elif "饺" in details['name'] or "饼" in details['name'] or "爪" in details['name'] or "包子" in details['name'] or "花卷" in details['name'] or "生煎" in details['name'] or "燕丸" in details['name'] or "火烧" in details['name'] or "馄炖" in details['name'] or "粽" in details['name'] or "面" in details['name'] : categories.add("美味熟食/面点")
-                
-                if count < 5: # 列举几个例子
-                    example_items.append(details['original_display_name'])
-                count += 1
-            
-            if categories:
-                response_parts.append("主要类别包括：" + "、".join(list(categories)) + "。")
-            if example_items:
-                response_parts.append("例如我们有：" + "、".join(example_items) + " 等。")
-            response_parts.append("您可以问我具体想了解哪一类，或者直接问某个产品的价格哦！")
-            final_response = "\\n".join(response_parts)
-        else:
-            final_response = "抱歉，我们的产品列表暂时还没有加载好，请稍后再问我有什么产品吧！"
-        calculation_done = True # 标记为已处理
+                name = details['name']
+                cat = "其他"
+                if any(k in name for k in ["鸡", "鸭"]): cat = "禽类产品"
+                elif any(k in name for k in ["鱼", "虾", "螺", "蛏", "蛤"]): cat = "海鲜河鲜"
+                elif any(k in name for k in ["菜", "瓜", "菇", "笋", "姜", "菠菜", "花苔", "萝卜", "南瓜", "玉米", "花生"]): cat = "新鲜蔬菜"
+                elif any(k in name for k in ["果", "莓", "橙", "桃", "芒", "龙眼", "荔枝", "凤梨", "葡萄", "石榴", "山楂", "芭乐"]): cat = "时令水果"
+                elif any(k in name for k in ["饺", "饼", "爪", "包子", "花卷", "生煎", "燕丸", "火烧", "馄炖", "粽", "面"]): cat = "美味熟食/面点"
+                elif any(k in name for k in ["蛋"]): cat = "蛋类"
+                if cat not in categories: categories[cat] = []
+                if len(categories[cat]) < 3: categories[cat].append(details['original_display_name'])
+            for cat_name, items in categories.items():
+                response_parts.append(f"\n【{cat_name}】")
+                for item_display_name in items: response_parts.append(f"- {item_display_name}")
+            response_parts.append("\n您可以问我具体想了解哪一类，或者直接问某个产品的价格。")
+            final_response = "\n".join(response_parts)
+        else: final_response = "抱歉，我们的产品列表暂时还没有加载好，您可以稍后再问我有什么产品。"
+        calculation_done = True
 
-    # 算账逻辑 (在非“卖什么”请求之后)
-    if not calculation_done:
-        # 改进：区分纯价格查询和多项购买
-        mentioned_products_in_query = []
-        for catalog_key, product_details in PRODUCT_CATALOG.items():
-            # 匹配产品名（不含规格）或完整带规格的产品名
-            product_base_name_for_match = product_details['name'].lower()
-            if product_base_name_for_match in user_input_for_processing or catalog_key in user_input_for_processing:
-                mentioned_products_in_query.append(catalog_key)
-        
-        is_multi_item_buy_request = any(keyword in user_input_for_processing for keyword in buy_keywords) and len(mentioned_products_in_query) > 1
-        is_single_item_price_query = any(keyword in user_input_for_processing for keyword in price_query_keywords) and len(mentioned_products_in_query) == 1
-        is_single_item_buy_request = any(keyword in user_input_for_processing for keyword in buy_keywords) and len(mentioned_products_in_query) == 1
-
-        if (is_multi_item_buy_request or is_single_item_buy_request) and PRODUCT_CATALOG:
-            ordered_items = []
-            total_price = 0.0
-            found_items_for_billing = False
-            
-            for catalog_key in PRODUCT_CATALOG.keys(): # 使用完整的 key 来匹配
-                product_details = PRODUCT_CATALOG[catalog_key]
-                product_name_for_match = product_details['name'].lower()
-                # 检查用户输入是否包含产品名（不含规格）或完整带规格的产品名
-                # catalog_key 已经是小写了
-                if product_name_for_match in user_input_for_processing or catalog_key in user_input_for_processing:
-                    quantity = 1 # 默认数量
-                    # 数量提取逻辑 (可以复用或改进之前的qty_match)
-                    # 简化版：在产品名前找数字
-                    # 注意：这里的product_name_for_match可能不包含规格，而catalog_key包含
-                    # 我们应该基于更明确的匹配来提取数量
-                    
-                    # 尝试匹配 "数字 (可选单位) 产品名(含规格)" 或 "数字 (可选单位) 产品基础名"
-                    # 优先匹配更具体的 catalog_key (如 "新鲜农场玉米 (箱)")
-                    qty_pattern_specific = f"(\\d+)\\s*(?:个|箱|磅|斤|袋|只|把|条|盒|包)?\\s*(?:{re.escape(catalog_key)})"
-                    qty_pattern_base = f"(\\d+)\\s*(?:个|箱|磅|斤|袋|只|把|条|盒|包)?\\s*(?:{re.escape(product_name_for_match)})"
-                    
-                    qty_match = re.search(qty_pattern_specific, user_input_for_processing, re.IGNORECASE)
-                    if not qty_match:
-                        qty_match = re.search(qty_pattern_base, user_input_for_processing, re.IGNORECASE)
-
-                    if qty_match:
-                        try:
-                            quantity = int(qty_match.group(1))
-                        except ValueError:
-                            quantity = 1
-                    
-                    item_price = product_details['price']
-                    original_display_name = product_details['original_display_name']
-                    original_unit_desc = product_details['specification']
-
-                    ordered_items.append({
-                        'name': original_display_name.capitalize(),
-                        'quantity': quantity,
-                        'unit_price': item_price,
-                        'unit_desc': original_unit_desc,
-                        'total': quantity * item_price
-                    })
-                    total_price += quantity * item_price
-                    found_items_for_billing = True
-            
-            if found_items_for_billing:
-                # 去重和合并逻辑 (与之前类似)
-                merged_items = {}
-                for item in ordered_items:
-                    key = (item['name'], item['unit_desc'])
-                    if key in merged_items:
-                        merged_items[key]['quantity'] += item['quantity']
-                    else:
-                        merged_items[key] = item
-                ordered_items = list(merged_items.values())
-                total_price = sum(item['quantity'] * item['unit_price'] for item in ordered_items)
-
-                if len(ordered_items) == 1 and is_single_item_price_query and not is_single_item_buy_request: # 单品价格查询
-                    item = ordered_items[0]
-                    final_response = f"{item['name']} ({item['unit_desc']}) 的价格是 ${item['unit_price']:.2f}。"
-                else: # 订单汇总
-                    response_parts = ["好的，这是您的订单详情："]
-                    for item in ordered_items:
-                        item_total = item['quantity'] * item['unit_price']
-                        response_parts.append(f"- {item['name']} x {item['quantity']} ({item['unit_desc']}): ${item['unit_price']:.2f} x {item['quantity']} = ${item_total:.2f}")
-                    response_parts.append(f"总计：${total_price:.2f}")
-                    final_response = "\\n".join(response_parts)
-                calculation_done = True
-            elif is_multi_item_buy_request or is_single_item_buy_request or is_single_item_price_query: # 尝试了但没找到
-                final_response = "抱歉，我没有在菜单中找到您提到的所有产品。您可以看看我们的产品列表，或者换个方式问我哦。"
-                calculation_done = True
-        
-        elif is_single_item_price_query and PRODUCT_CATALOG: # 单独处理只问价格但没匹配到产品的情况
-            # 检查是否提到了某个产品，但该产品不在目录中
-            product_mentioned_but_not_found = True # 假设提到了但没找到
-            if not mentioned_products_in_query: # 如果根本没提到任何已知产品词根
-                 product_mentioned_but_not_found = False
-
-            if product_mentioned_but_not_found:
-                final_response = "抱歉，我没有找到您查询的产品。您可以看看我们的产品列表，或者问问其他产品？"
+    # 2. 处理推荐请求 (如果上面没处理)
+    elif is_recommend_request: # 使用 elif 确保意图不重叠
+        if PRODUCT_CATALOG:
+            import random
+            response_parts = ["为您推荐几样我们这里不错的商品："]
+            num_to_recommend = min(len(PRODUCT_CATALOG), 3)
+            if num_to_recommend > 0:
+                recommended_keys = random.sample(list(PRODUCT_CATALOG.keys()), num_to_recommend)
+                for key in recommended_keys:
+                    details = PRODUCT_CATALOG[key]
+                    response_parts.append(f"- {details['original_display_name']}: ${details['price']:.2f} / {details['specification']}")
+                response_parts.append("\n您对哪个感兴趣，或者想了解更多吗？")
             else:
-                 final_response = "您想查询哪个产品的价格呢？可以说出产品名称哦。"
-            calculation_done = True
+                response_parts.append("我们的产品正在准备中，暂时无法为您推荐，非常抱歉！")
+            final_response = "\n".join(response_parts)
+        else: final_response = "我们的产品正在准备中，暂时无法为您推荐，非常抱歉！"
+        calculation_done = True
 
-    # 如果没有完成算账，或者不是算账请求，则走通用问答或Gemini
+    # 3. 尝试算账或查询价格 (如果上面都没处理)
+    if not calculation_done and PRODUCT_CATALOG:
+        ordered_items = []
+        total_price = 0.0
+        found_items_for_billing = False
+        # 重新定义意图判断，使其更侧重于产品匹配和购买/价格关键词的组合
+        is_buy_action = any(keyword in user_input_for_processing for keyword in buy_intent_keywords)
+        is_price_action = any(keyword in user_input_for_processing for keyword in price_query_keywords)
+        
+        # 提取用户提到的产品
+        extracted_user_items = [] # 存储用户提到的 (产品名, 数量)
+        # 这是一个非常简化的提取，实际应用中需要更强的NLP
+        for catalog_key, product_details in PRODUCT_CATALOG.items():
+            product_name_for_match = product_details['name'].lower()
+            # 尝试匹配 "数量 产品名" 或 "产品名"
+            # 这里的数量提取非常基础
+            qty = 1
+            # 尝试匹配 "数字 产品名"
+            m = re.search(f'([\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*({re.escape(product_name_for_match)}|{re.escape(product_details["original_display_name"].lower())})', user_input_for_processing)
+            if m:
+                try: qty = int(m.group(1)) # 假设中文数字已转换为阿拉伯数字
+                except: qty = 1
+                extracted_user_items.append({'key': catalog_key, 'name': product_details['original_display_name'], 'qty': qty, 'details': product_details})
+                found_items_for_billing = True
+            elif product_name_for_match in user_input_for_processing or product_details["original_display_name"].lower() in user_input_for_processing:
+                 extracted_user_items.append({'key': catalog_key, 'name': product_details['original_display_name'], 'qty': 1, 'details': product_details})
+                 found_items_for_billing = True
+
+        if found_items_for_billing:
+            # 去重和合并数量
+            merged_items_dict = {}
+            for item in extracted_user_items:
+                item_key = item['key']
+                if item_key in merged_items_dict:
+                    merged_items_dict[item_key]['qty'] += item['qty']
+                else:
+                    merged_items_dict[item_key] = item
+            
+            processed_ordered_items = []
+            for key, item_data in merged_items_dict.items():
+                details = item_data['details']
+                qty = item_data['qty']
+                item_total = qty * details['price']
+                total_price += item_total
+                processed_ordered_items.append({
+                    'name': details['original_display_name'].capitalize(),
+                    'quantity': qty,
+                    'unit_price': details['price'],
+                    'unit_desc': details['specification'],
+                    'total': item_total
+                })
+
+            if processed_ordered_items: # 确保真的有处理过的物品
+                if len(processed_ordered_items) == 1 and is_price_action and not is_buy_action:
+                    item = processed_ordered_items[0]
+                    final_response = f"{item['name']} ({item['unit_desc']}) 的价格是 ${item['unit_price']:.2f}。"
+                else:
+                    response_parts = ["好的，这是您的订单详情："]
+                    for item in processed_ordered_items:
+                        response_parts.append(f"- {item['name']} x {item['quantity']} ({item['unit_desc']}): ${item['unit_price']:.2f} x {item['quantity']} = ${item['total']:.2f}")
+                    if total_price > 0:
+                        response_parts.append(f"\n总计：${total_price:.2f}")
+                    final_response = "\n".join(response_parts)
+                calculation_done = True
+            elif is_buy_action or is_price_action: # 有意图但没匹配到
+                final_response = "抱歉，我没有在菜单中准确识别到您提到的产品。您可以试试说出更完整的产品名称吗？"
+                calculation_done = True
+        elif is_buy_action or is_price_action: # 有意图但目录中完全没匹配到任何词
+             final_response = "您好！请问您想买些什么或者查询什么价格呢？可以说出具体的产品名称哦。"
+             calculation_done = True
+
+    # 如果以上逻辑都未处理，则交由Gemini处理
     if not calculation_done:
         if gemini_model:
             try:
@@ -285,29 +269,29 @@ def chat():
                     "你是一位经验丰富的果蔬营养顾问和生鲜采购专家。请用自然、亲切且专业的口吻与用户交流。"
                     "避免刻板的AI语言。你的目标是提供准确、有用的信息，让对话感觉轻松愉快。"
                     "专注于水果、蔬菜及相关农产品。如果用户询问无关内容，请委婉引导回主题。"
-                    "如果用户问你有什么产品，你可以简单介绍一下主要类别，并鼓励用户问具体产品。"
+                    "如果用户问你有什么产品，请友好地介绍我们有多种生鲜，并鼓励用户问具体类别或产品。"
                     "如果用户询问具体产品的价格或想下单，请根据产品目录信息准确回答。如果产品不在目录中，请礼貌告知。"
                     "如果用户只是打招呼，比如“你好”，请友好回应。"
                 )
                 full_prompt = f"{system_prompt}"
                 
-                # 只有在非明确的“卖什么”请求，且产品目录非空时，才附加产品列表给Gemini
-                if not is_what_do_you_sell_request and PRODUCT_CATALOG:
-                    full_prompt += "\\n\\n作为参考，这是我们目前的部分产品列表和价格：\\n"
+                # 只有在非明确的“卖什么”或“推荐”请求，且产品目录非空时，才附加产品列表给Gemini
+                if PRODUCT_CATALOG and not is_what_do_you_sell_request and not is_recommend_request:
+                    full_prompt += "\n\n作为参考，这是我们目前的部分产品列表和价格（价格单位以实际规格为准）：\n"
                     limited_catalog_for_prompt = ""
                     count = 0
                     for name_key, details in PRODUCT_CATALOG.items():
                         display_name = details.get('original_display_name', name_key.capitalize())
-                        limited_catalog_for_prompt += f"- {display_name}: ${details['price']:.2f} / {details['specification']}\\n"
+                        limited_catalog_for_prompt += f"- {display_name}: ${details['price']:.2f} / {details['specification']}\n"
                         count += 1
                         if count >= 5: # 减少给Gemini的列表长度
-                            limited_catalog_for_prompt += "...还有更多产品...\\n"
+                            limited_catalog_for_prompt += "...还有更多产品...\n"
                             break
                     if not limited_catalog_for_prompt.strip():
-                        limited_catalog_for_prompt = "（目前产品列表参考信息未能加载）\\n"
+                        limited_catalog_for_prompt = "（目前产品列表参考信息未能加载）\n"
                     full_prompt += limited_catalog_for_prompt
                 
-                full_prompt += f"\\n\\n用户的问题是：\\\"{user_input}\\\""
+                full_prompt += f"\n\n用户的问题是：\"{user_input}\""
                 
                 print(f"Prompt to Gemini: {full_prompt}")
                 gemini_response = gemini_model.generate_content(full_prompt)
@@ -319,23 +303,22 @@ def chat():
                 else:
                     print("Gemini response does not have .text attribute or .text is empty.")
                     final_response = "抱歉，AI助手暂时无法给出回复，请稍后再试。"
-                    if hasattr(gemini_response, 'prompt_feedback'):
+                    if hasattr(gemini_response, 'prompt_feedback') and gemini_response.prompt_feedback:
                         print(f"Gemini prompt feedback: {gemini_response.prompt_feedback}")
-                    if hasattr(gemini_response, 'candidates') and gemini_response.candidates:
+                    elif hasattr(gemini_response, 'candidates') and gemini_response.candidates and len(gemini_response.candidates) > 0:
                         print(f"Gemini candidates: {gemini_response.candidates}")
-                        if gemini_response.candidates[0].content and gemini_response.candidates[0].content.parts:
-                             final_response = "".join(part.text for part in gemini_response.candidates[0].content.parts if hasattr(part, 'text'))
-                             print(f"Extracted text from Gemini candidates: {final_response}")
-                             if not final_response.strip():
-                                 final_response = "AI助手收到了回复但内容为空，请尝试换个问法。"
-                        else:
-                            final_response = "AI助手返回了无法直接解析的回复结构。"
+                        # Try to extract from candidates if .text was missing
+                        try:
+                            final_response = "".join(part.text for part in gemini_response.candidates[0].content.parts if hasattr(part, 'text'))
+                            if not final_response.strip(): final_response = "AI助手收到了回复但内容为空。"
+                        except Exception:
+                            final_response = "AI助手返回了无法解析的回复结构。"
                     else:
                         final_response = "AI助手没有返回预期的文本回复结构。"
             except Exception as e:
                 print(f"调用 Gemini API 失败: {e}")
                 final_response = "抱歉，AI助手暂时遇到问题，请稍后再试。"
-        else: # Gemini不可用，且不是算账
+        else: # Gemini不可用
             final_response = "抱歉，我现在无法处理您的请求，也无法连接到我的知识库。请稍后再试。"
 
     return jsonify({'response': final_response})
