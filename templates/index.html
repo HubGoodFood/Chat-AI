@@ -5,40 +5,51 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>智能果蔬助手</title>
     <style>
+        html {
+            height: 100%;
+            overflow: hidden; /* Prevent scrolling of the html element */
+        }
         body {
+            height: 100%; /* Make body take full height of html */
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
             display: flex;
             flex-direction: column;
-            align-items: center; /* Centers #chatContainer on larger screens */
+            /* align-items: center; Removed for better full-width control, centering #chatContainer via margin */
             margin: 0;
-            padding: 10px;
+            /* padding: 10px; Will be handled by media query or #chatContainer */
             background-color: #f4f7f6;
             color: #333;
-            min-height: 100vh;
             box-sizing: border-box;
+            overflow: hidden; /* Prevent body from scrolling; scrolling handled by #chatbox */
         }
         h1 {
             color: #4CAF50;
             margin-top: 15px;
             margin-bottom: 15px;
-            font-size: 1.8em; /* 调整标题大小 */
+            font-size: 1.8em;
+            text-align: center; /* Ensure h1 is centered */
+            flex-shrink: 0; /* Prevent h1 from shrinking */
+            padding-left: 10px; /* Add some padding if body padding is removed */
+            padding-right: 10px;
         }
         #chatContainer {
             width: 100%;
-            max-width: 600px;
+            max-width: 600px; /* Max width for desktop */
+            margin-left: auto; /* Center #chatContainer on larger screens */
+            margin-right: auto; /* Center #chatContainer on larger screens */
             background-color: #fff;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            overflow: hidden; /* Important to contain chatbox scrolling */
             display: flex;
             flex-direction: column;
-            flex-grow: 1; /* Allows chatContainer to fill space in body */
+            flex-grow: 1; /* Critical: takes up remaining vertical space in body */
+            overflow: hidden; /* Child #chatbox will scroll */
         }
         #chatbox {
-            flex-grow: 1; /* Allows chatbox to fill space in chatContainer */
-            overflow-y: auto;
+            flex-grow: 1; /* Critical: takes up remaining vertical space in #chatContainer */
+            overflow-y: auto; /* Enables scrolling for chat messages */
             padding: 15px;
-            border-bottom: 1px solid #eee;
+            /* border-bottom: 1px solid #eee; Moved to #inputArea top border */
         }
         #chatbox p {
             margin: 0 0 12px 0;
@@ -54,7 +65,9 @@
         #inputArea {
             display: flex;
             padding: 10px;
-            background-color: #f9f9f9; /* 给输入区域一个轻微的背景色 */
+            background-color: #f9f9f9;
+            border-top: 1px solid #eee; /* Separator line */
+            flex-shrink: 0; /* Prevent input area from shrinking */
         }
         #userInput {
             flex-grow: 1;
@@ -78,7 +91,7 @@
             cursor: pointer;
             font-size: 1em;
             transition: background-color 0.3s ease;
-            white-space: nowrap; /* 防止按钮文字换行 */
+            white-space: nowrap;
         }
         button:hover {
             background-color: #45a049;
@@ -87,19 +100,18 @@
         /* 针对小屏幕的媒体查询 */
         @media (max-width: 600px) {
             body {
-                padding: 0;
-                align-items: stretch; /* Ensure children take full width if not otherwise constrained */
+                padding: 0; /* Remove body padding on small screens */
             }
             #chatContainer {
                 border-radius: 0;
-                max-width: 100%;
-                width: 100%; /* Ensure it takes full width on mobile */
+                max-width: 100%; /* Ensure it takes full width */
+                /* width: 100%; Is implicit with max-width: 100% and flex behavior */
+                /* height related properties are now handled by flex-grow */
             }
             h1 {
                 font-size: 1.5em;
                 margin-top: 10px;
                 margin-bottom: 10px;
-                text-align: center; /* Explicitly center h1 as body align-items changed for mobile */
             }
             #chatbox {
                 padding: 10px;
