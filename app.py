@@ -9,6 +9,7 @@ print(" Flask app object created. ")
 
 # 从环境变量中获取 API 密钥
 GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY')
+print(f"--- STARTUP CHECK: GOOGLE_API_KEY from env is {'SET' if GEMINI_API_KEY else 'NOT SET'} ---") # 新增的调试打印
 if not GEMINI_API_KEY:
     print("警告：未找到 GOOGLE_API_KEY 环境变量。Gemini API 将无法使用。")
     # 你可以在这里决定是完全禁用 Gemini 功能，还是允许应用在没有 API 密钥的情况下运行（但会报错）
