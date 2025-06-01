@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template
 import os
 import google.generativeai as genai
 import re
+import csv # 导入csv模块
 
 app = Flask(__name__)
 print(" Flask app script is starting up... ")
@@ -38,134 +39,85 @@ else:
 # 全局变量来存储产品数据
 PRODUCT_CATALOG = {}
 
-def parse_price_unit(price_str, unit_str):
-    """尝试解析价格和单位，处理多种格式"""
-    try:
-        price = float(re.findall(r"\d+\.?\d*", price_str)[0])
-        unit = unit_str.strip().lower()
-        # 尝试标准化单位，例如 '2磅' -> '磅'
-        unit_match = re.search(r"([a-zA-Z\u4e00-\u9fa5]+)", unit) # 匹配字母和中文字符作为单位
-        if unit_match:
-            unit = unit_match.group(1)
-        
-        quantity_match = re.search(r"(\d+)\s*" + re.escape(unit), price_str, re.IGNORECASE)
-        if not quantity_match: # 如果价格字符串中没有数量，尝试从单位字符串中找
-             quantity_match = re.search(r"(\d+)\s*" + re.escape(unit), unit_str, re.IGNORECASE)
-
-        quantity = 1 # 默认为1个单位
-        if quantity_match:
-            # This part is tricky due to varied formats like "25个", "2包x400g"
-            # For now, let's try a simple extraction if the format is like "25个"
-            simple_qty_match = re.match(r"(\d+)", unit_str)
-            if simple_qty_match:
-                try:
-                    quantity = int(simple_qty_match.group(1))
-                except ValueError:
-                    pass #保持quantity为1
-        
-        # 对于 "23/2只" 这样的格式，尝试提取数量和单位
-        if '/' in price_str and '只' in price_str: #非常特定的规则
-            parts = price_str.split('/')
-            if len(parts) == 2:
-                try:
-                    price = float(parts[0])
-                    if '只' in parts[1]:
-                        unit = '只'
-                        quantity = int(re.findall(r"\d+", parts[1])[0])
-                except ValueError:
-                    pass
-
-
-        return price, unit, quantity
-    except:
-        return None, None, 1 #解析失败
-
-def load_product_data(file_path="products.txt"):
-    print("Attempting to load product data...")
+def load_product_data(file_path="products.csv"): # 更改文件名为 products.csv
+    print(f"Attempting to load product data from {file_path}...") # 更新打印信息
     global PRODUCT_CATALOG
     PRODUCT_CATALOG = {}
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("🌸") or line.startswith("🪷") or line.startswith("💥") or "===" in line or "本周蔬菜水果" in line or "保证质量" in line:
-                    continue
+        with open(file_path, mode='r', encoding='utf-8', newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            if not reader.fieldnames or not all(col in reader.fieldnames for col in ['ProductName', 'Specification', 'Price', 'Unit']):
+                print(f"错误: CSV文件 {file_path} 的列标题不正确。应包含 'ProductName', 'Specification', 'Price', 'Unit'")
+                return
+            
+            for row_num, row in enumerate(reader, 1): # 从1开始计数行号，方便调试
+                try:
+                    product_name = row['ProductName'].strip()
+                    specification = row['Specification'].strip()
+                    price_str = row['Price'].strip()
+                    unit = row['Unit'].strip()
 
-                # 尝试更灵活地匹配产品名称、价格和单位
-                # 这个正则表达式需要根据实际文件格式不断调整和优化
-                # 基本思路：(产品名) ($价格) (/单位描述) (可选的第二个价格/单位)
-                # 例如: 农场素食散养走地萨松母鸡$23.99/只
-                #       谭头水饺$25/袋
-                #       新鲜农场玉米$30/箱，18/半箱
-                #       农场新鲜平菇 $23/3磅，35/5磅
-                
-                # 先移除行号和特殊标记如 "1. ✨"
-                line = re.sub(r"^\d+\.\\s*✨?\\s*", "", line).strip()
-                line = re.sub(r"✨", "", line).strip() # 移除所有✨
-                line = re.sub(r"💕", "", line).strip() # 移除所有💕
-                line = re.sub(r"❗️", "", line).strip() # 移除所有❗️
-
-                # 分割多种规格的产品
-                items = re.split(r'[，]\s*|\s+-\s+', line) # 用中文逗号或 " - " 分割
-                
-                base_product_name = ""
-
-                for i, item_part in enumerate(items):
-                    item_part = item_part.strip()
-                    if not item_part:
+                    if not product_name or not price_str or not specification or not unit:
+                        print(f"警告: CSV文件第 {row_num+1} 行数据不完整，已跳过: {row}")
                         continue
 
-                    # 匹配 "产品名$价格/单位" 或 "产品名 价格/单位"
-                    match = re.match(r"(.+?)(?:\\s*\\$|\\s+)(\\d+\\.?\\d+)\\s*/\\s*(.+)", item_part)
+                    price = float(price_str)
                     
-                    if not match: # 尝试另一种格式 "产品名$价格单位" (例如 $29/2版)
-                        match = re.match(r"(.+?)(?:\\s*\\$|\\s+)(\\d+\\.?\\d+)([a-zA-Z\u4e00-\u9fa5\\d/磅]+)", item_part)
+                    # 创建一个唯一的键，例如 "产品名称 (规格)"
+                    # 如果规格已经是产品名的一部分（例如 "产品名称 半箱"），则直接用产品名
+                    # 这里我们假设 ProductName 列已经是唯一的，或者 ProductName + Specification 是唯一的
+                    # 为了简单起见，我们先用 ProductName + Specification 作为组合键的基础
+                    # 如果 Specification 为空或与 Unit 相同，可以只用 ProductName
+                    
+                    # 让key更具描述性，例如 "新鲜农场玉米 (箱)" 或 "新鲜农场玉米 (半箱)"
+                    # 我们将使用 ProductName 和 Specification 来构建一个唯一的 key
+                    # 如果 Specification 已经能很好地区分，比如 “箱” vs “半箱”，那么可以这样组合
+                    # 如果 Specification 只是 “只”，而 ProductName 已经是 “萨松母鸡”，那么key可以是 “萨松母鸡 (只)"
+                    # 或者，如果希望用户直接说 “萨松母鸡”，就能匹配到，那么key应该是小写的 “萨松母鸡”
+                    # 考虑到用户可能会说 “玉米 箱” 或 “玉米 半箱”，我们将产品名和规格组合起来作为key
+                    
+                    # 修正：使用产品名和规格来构建唯一的key，并转为小写
+                    # 例如，如果CSV中有两行：
+                    # 新鲜农场玉米,箱,30,箱
+                    # 新鲜农场玉米,半箱,18,半箱
+                    # 对应的key会是 "新鲜农场玉米 (箱)" 和 "新鲜农场玉米 (半箱)"
+                    # 这样用户说“我要一箱玉米”或“我要半箱玉米”时，我们可以尝试匹配
+                    
+                    # 为了让用户输入匹配更容易，我们将产品名和规格组合起来
+                    # 如果规格已经是产品名的一部分（例如，产品名是“玉米 半箱”），则直接用产品名
+                    # 否则，如果规格有意义，则组合
+                    unique_product_key = product_name
+                    if specification and specification.lower() != unit.lower() and specification not in product_name:
+                        unique_product_key = f"{product_name} ({specification})"
+                    
+                    PRODUCT_CATALOG[unique_product_key.lower()] = {
+                        'name': product_name, # 原始产品名，用于显示
+                        'specification': specification, # 规格
+                        'price': price, 
+                        'unit': unit, # 价格对应的单位
+                        'original_display_name': unique_product_key # 用于显示给用户的完整名称
+                    }
+                    # print(f"Loaded: {unique_product_key.lower()} -> Price: {price}, Unit: {unit}, Spec: {specification}")
 
-
-                    if match:
-                        product_name_full = match.group(1).strip()
-                        price_str = match.group(2).strip()
-                        unit_desc_full = match.group(3).strip()
-
-                        # 如果是多规格的第一部分，设定为基础产品名
-                        if i == 0:
-                            base_product_name = product_name_full
-                        else: # 如果是后续规格，且没有明确产品名，则使用基础产品名
-                            # 检查后续部分是否也包含一个看起来像产品名的部分
-                            # 这是一个简化处理，可能需要更复杂的逻辑来判断是否是全新的产品名
-                            if not any(char.isdigit() or char == '$' for char in product_name_full.split()[0]): # 如果第一部分不像价格
-                                base_product_name = product_name_full # 更新基础产品名
-
-                        price, unit, quantity_in_unit_desc = parse_price_unit(price_str, unit_desc_full)
-
-                        if price is not None and unit is not None:
-                            # 构建一个唯一的key，结合基础产品名和单位描述（处理"半箱"等情况）
-                            # 对于 "农场新鲜玉米$30/箱，18/半箱"，unit_desc_full 会是 "箱" 和 "半箱"
-                            # 我们希望产品名能区分它们
-                            current_item_name = base_product_name
-                            if "半" in unit_desc_full and "箱" in unit_desc_full : #特定处理半箱
-                                current_item_name = f"{base_product_name} (半箱)"
-                                unit = "半箱"
-                            elif "半" in unit_desc_full and "磅" in unit_desc_full:
-                                current_item_name = f"{base_product_name} (半磅)"
-                                unit = "半磅"
-                            # 更多类似规则可以添加
-
-                            # 如果单位描述中已经包含了数量，例如 "25个"，则price是这25个的总价
-                            # 我们需要计算单个的价格
-                            # single_item_price = price / quantity_in_unit_desc if quantity_in_unit_desc > 0 else price
-                            
-                            # 存储时，我们存储的是 unit_desc_full 这个单位的价格
-                            PRODUCT_CATALOG[current_item_name.lower()] = {'price': price, 'unit': unit, 'original_unit_desc': unit_desc_full}
-                            # print(f"Loaded: {current_item_name.lower()} - Price: {price}, Unit: {unit}, Original Unit Desc: {unit_desc_full}")
+                except ValueError as ve:
+                    print(f"警告: CSV文件第 {row_num+1} 行价格格式错误，已跳过: {row} - {ve}")
+                except KeyError as ke:
+                    print(f"警告: CSV文件第 {row_num+1} 行缺少必要的列，已跳过: {row} - {ke}")
+                except Exception as e:
+                    print(f"警告: 处理CSV文件第 {row_num+1} 行时发生未知错误，已跳过: {row} - {e}")
 
     except FileNotFoundError:
-        print(f"错误: 产品文件 {file_path} 未找到。")
+        print(f"错误: 产品文件 {file_path} 未找到。请确保它在应用根目录。")
     except Exception as e:
-        print(f"加载产品数据时出错: {e}")
+        print(f"加载产品数据时发生严重错误: {e}")
+    
+    if not PRODUCT_CATALOG:
+        print("警告: 产品目录为空。请检查 products.csv 文件是否存在且包含有效数据和正确的列标题。")
+    else:
+        print(f"产品目录加载完成，共 {len(PRODUCT_CATALOG)} 条产品规格。")
 
-# 应用启动时加载产品数据
-load_product_data()
+# 应用启动时加载产品数据 (确保在定义路由之前)
+load_product_data() # 默认加载 products.csv
 
 @app.route('/')
 def index():
@@ -175,130 +127,111 @@ def index():
 def chat():
     print("--- Chat route entered ---")
     user_input = request.json.get('message', '')
-    user_input_for_processing = user_input.lower() # 用于本地处理转小写
+    user_input_for_processing = user_input.lower()
     
-    print(f"--- New chat request --- User input: {user_input}") # 调试信息
-    print(f"Gemini model object: {gemini_model}") # 调试信息：检查模型对象
+    print(f"--- New chat request --- User input: {user_input}")
+    print(f"Gemini model object: {gemini_model}")
+    print(f"PRODUCT_CATALOG size: {len(PRODUCT_CATALOG)}") # 调试：打印产品目录大小
+    # if PRODUCT_CATALOG: # 调试：打印一些产品看看是否加载正确
+    #     print(f"Sample product from catalog: {list(PRODUCT_CATALOG.items())[0] if PRODUCT_CATALOG else 'Catalog is empty'}")
 
-    response_from_local_kb = None
     calculation_done = False
-    
-    # 尝试解析算账请求
-    # 简化版：寻找 "买/要/订单" 和 "多少钱/总价/一共" 等关键词
-    buy_keywords = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只"]
-    price_keywords = ["多少钱", "总价", "一共", "结算", "算一下"]
+    final_response = ""
 
-    is_buy_request = any(keyword in user_input for keyword in buy_keywords)
-    is_price_request = any(keyword in user_input for keyword in price_keywords)
+    buy_keywords = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只", "多少钱", "价格"]
+    # is_buy_or_price_request = any(keyword in user_input for keyword in buy_keywords)
+    # 更宽松的匹配：如果用户提到了目录中的产品名，也可能是想问价格或下单
+    mentioned_product_keys = [pk for pk in PRODUCT_CATALOG.keys() if pk.split(' (')[0] in user_input_for_processing or pk in user_input_for_processing]
+    is_buy_or_price_request = any(keyword in user_input for keyword in buy_keywords) or bool(mentioned_product_keys)
 
-    if is_buy_request or (is_price_request and any(prod.lower() in user_input_for_processing for prod in PRODUCT_CATALOG.keys())):
-        # 这是一个可能的算账请求
-        # 提取物品和数量 (这是一个非常简化的提取，实际需要更复杂的NLP)
+    if is_buy_or_price_request and PRODUCT_CATALOG:
         ordered_items = []
         total_price = 0
         found_items_for_billing = False
-
-        # 尝试从用户输入中提取数量和产品
-        # 例如: "我要1箱玉米和2个苹果"
-        # 这个正则表达式需要非常小心地构建和测试
-        # (数量) (单位/可选) (产品名)
-        # \s*([0-9.]+)\s*(箱|个|磅|lb|袋|只|把|版|斤|条)?\s*([一-龥a-zA-Z\s]+(?:（半箱）|（半磅）)?)
-        # (?:(?P<quantity>[0-9.]+)\s*(?P<unit>箱|个|磅|lb|袋|只|把|版|斤|条|盒|包)?\s*)?(?P<name>[一-龥a-zA-Z\s()（）]+)
         
-        # 更简单的逐个产品匹配
-        potential_order_details = []
-        for product_key in PRODUCT_CATALOG.keys():
-            # 尝试匹配 "数字+单位+产品名" 或 "数字+产品名" 或 "产品名"
-            # 这里的product_key是小写的
-            # 为了匹配 "1箱玉米", product_key 应该是 "农场新鲜玉米" 或 "农场新鲜玉米 (半箱)"
-            # 我们需要从 product_key 中去掉括号里的描述部分来做初步匹配
-            
-            product_base_name_for_match = product_key.split(' (')[0]
+        # 改进的产品和数量提取逻辑
+        # 遍历产品目录的键（例如 "新鲜农场玉米 (箱)"）
+        for catalog_key, product_details in PRODUCT_CATALOG.items():
+            product_name_for_match = product_details['name'].lower() # 例如 "新鲜农场玉米"
+            specification_for_match = product_details['specification'].lower() # 例如 "箱"
 
-            # 1. 尝试匹配 "数字 单位 产品名" (例如 "1 箱 玉米")
-            # 2. 尝试匹配 "数字产品名" (例如 "1玉米", "1个玉米") - 这比较难，因为单位可能嵌入
-            # 3. 尝试匹配 "产品名" (默认数量为1)
-            
-            # 简化逻辑：如果用户输入包含产品名(小写)
-            if product_base_name_for_match in user_input_for_processing:
-                # 尝试提取数量，默认为1
-                quantity = 1
-                # 尝试匹配 "数字(可选的小数) + (可选的空格) + (可选的单位) + (可选的空格) + 产品名"
-                # 例如 "我要 2 箱 农场新鲜玉米" 或 "我要 两 箱 农场新鲜玉米"
-                # 或者 "2农场新鲜玉米"
-                # 这个正则非常复杂，先用一个简化的
-                
-                # 查找产品名前面的数字
-                # (?:^|\s+|和|与)([0-9一二三四五六七八九十百千万俩两]+)\s*(?:个|箱|磅|袋|只|把|条|盒|包|斤)?\s*(?={product_base_name_for_match})
-                # (?P<quantity_num>[0-9一二三四五六七八九十百千万俩两]+)\s*(?P<unit_word>个|箱|磅|袋|只|把|条|盒|包|斤)?\s*(?={product_base_name_for_match})
-                
-                # 简化：直接在产品名前面找数字，忽略单位词匹配
-                # \b(\d+)\s*(?:个|箱|磅|斤|袋|只|把|条|盒|包)?\s*{product_base_name_for_match}
-                qty_match = re.search(f"(\\d+)\\s*(?:个|箱|磅|斤|袋|只|把|条|盒|包)?\\s*(?:{re.escape(product_base_name_for_match)})", user_input_for_processing, re.IGNORECASE)
-                if qty_match:
-                    try:
-                        quantity = int(qty_match.group(1))
-                    except ValueError:
-                        quantity = 1 # 如果转换失败，默认为1
-                
-                # 检查是否是特定规格，如 "半箱"
-                current_product_lookup_key = product_key # 默认使用完整key (可能包含 " (半箱)")
-                if f"{product_base_name_for_match} (半箱)" in PRODUCT_CATALOG and "半箱" in user_input_for_processing and product_base_name_for_match in user_input_for_processing:
-                    current_product_lookup_key = f"{product_base_name_for_match} (半箱)"
-                elif f"{product_base_name_for_match} (半磅)" in PRODUCT_CATALOG and "半磅" in user_input_for_processing and product_base_name_for_match in user_input_for_processing:
-                     current_product_lookup_key = f"{product_base_name_for_match} (半磅)"
-                # ...可以为其他规格添加更多elif
+            # 构造几种可能的匹配模式
+            # 1. 产品名 + 规格 (例如 "玉米箱", "玉米 半箱")
+            # 2. 产品名 (如果规格不突出或用户可能省略)
+            patterns_to_check = []
+            if specification_for_match and specification_for_match != product_name_for_match:
+                patterns_to_check.append(f"{product_name_for_match}.*?{specification_for_match}") # 允许中间有其他字符
+                patterns_to_check.append(f"{product_name_for_match}{specification_for_match}") # 直接连接
+            patterns_to_check.append(product_name_for_match) # 只匹配产品名
 
-                if current_product_lookup_key in PRODUCT_CATALOG:
-                    item_price = PRODUCT_CATALOG[current_product_lookup_key]['price']
-                    item_unit = PRODUCT_CATALOG[current_product_lookup_key]['unit']
-                    original_unit_desc = PRODUCT_CATALOG[current_product_lookup_key]['original_unit_desc']
-
-                    # 如果用户明确指定了单位，且该单位与产品目录中的单位不同，但价格是基于目录单位的
-                    # 例如用户说 "1个苹果"，但价格是 "苹果 $5/磅" -> 这种情况目前难以处理
-                    # 我们假设用户说的单位和数量是针对产品目录中记录的那个单位的
+            for pattern in patterns_to_check:
+                # 查找产品模式在用户输入中的所有匹配项
+                for match_obj in re.finditer(pattern, user_input_for_processing):
+                    # 尝试在匹配到的产品名前面提取数量
+                    quantity = 1 # 默认数量
+                    # 向前查找数字 (考虑中文数字和阿拉伯数字)
+                    # (?P<num>[\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|瓶|片|块|卷|对|副|套|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*(?={re.escape(match_obj.group(0))})
+                    # 这是一个非常复杂的正则，先简化
+                    # 在匹配到的产品 (match_obj.group(0)) 前面找数字
+                    # 我们需要从 match_obj.start() 向前搜索
+                    search_before_product = user_input_for_processing[:match_obj.start()]
+                    # 从后往前匹配数字和可选的单位词
+                    qty_match_groups = re.search(r'([\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|瓶|片|块|卷|对|副|套|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*$', search_before_product.strip())
                     
-                    # 修正：如果original_unit_desc包含数量，例如 "25个"，那么item_price是这25个的总价
-                    # 我们需要的是单个的平均价格，或者说，如果用户要“1份”，那就是这个总价
-                    # 这里的逻辑是，如果用户说 "1份小笼包"，而小笼包是 "$20/25个"，那么价格是20
-                    # 如果用户说 "50个小笼包"，我们需要识别出 "2份"
+                    if qty_match_groups:
+                        num_str = qty_match_groups.group(1)
+                        # (这里可以加入中文数字转阿拉伯数字的逻辑，暂时简化)
+                        try:
+                            quantity = int(num_str)
+                        except ValueError: # 如果是中文数字等，暂时无法转换，默认为1
+                            quantity = 1 
                     
-                    # 简化：目前假设用户说的数量是针对 listed unit_desc 的数量
-                    # 例如，用户说 "2箱玉米"，如果玉米是 "$30/箱"，则总价是 2*30
-                    # 用户说 "1份小笼包"，如果小笼包是 "$20/25个"，则总价是 1*20 (这里的单位是 "25个")
+                    # 确保我们使用的是匹配到的 catalog_key
+                    item_price = product_details['price']
+                    original_display_name = product_details['original_display_name']
+                    original_unit_desc = product_details['specification'] # CSV中的Specification列
 
                     ordered_items.append({
-                        'name': current_product_lookup_key.capitalize(), # 显示时首字母大写
+                        'name': original_display_name.capitalize(),
                         'quantity': quantity,
-                        'unit_price': item_price, # 这是 original_unit_desc 的价格
-                        'unit_desc': original_unit_desc, # 例如 "只", "袋", "25个"
+                        'unit_price': item_price,
+                        'unit_desc': original_unit_desc,
                         'total': quantity * item_price
                     })
                     total_price += quantity * item_price
                     found_items_for_billing = True
-
+                    # 找到一个匹配后，可以跳出内部pattern循环，避免对同一用户输入段重复添加同一产品
+                    # 但如果用户说“我要玉米，还要一箱玉米”，我们可能需要更复杂的逻辑来去重或合并
+                    # 暂时简化：只要匹配到就添加
+        
+        # 去重 ordered_items (基于 name 和 unit_desc 组合，并合并数量)
         if found_items_for_billing:
+            merged_items = {}
+            for item in ordered_items:
+                key = (item['name'], item['unit_desc'])
+                if key in merged_items:
+                    merged_items[key]['quantity'] += item['quantity']
+                    merged_items[key]['total'] += item['total'] # 这里应该是 item_price * 新quantity，或者直接累加total
+                else:
+                    merged_items[key] = item
+            ordered_items = list(merged_items.values())
+            # 重新计算总价，因为数量可能合并了
+            total_price = sum(item['quantity'] * item['unit_price'] for item in ordered_items)
+
             response_parts = ["好的，这是您的订单详情："]
             for item in ordered_items:
-                response_parts.append(f"- {item['name']} x {item['quantity']} ({item['unit_desc']}): ${item['unit_price']:.2f} x {item['quantity']} = ${item['total']:.2f}")
+                # 更新小计的计算方式
+                item_total = item['quantity'] * item['unit_price']
+                response_parts.append(f"- {item['name']} x {item['quantity']} ({item['unit_desc']}): ${item['unit_price']:.2f} x {item['quantity']} = ${item_total:.2f}")
             response_parts.append(f"总计：${total_price:.2f}")
             final_response = "\\n".join(response_parts)
             calculation_done = True
-        elif is_buy_request or is_price_request: # 尝试了算账但没找到具体物品
-            final_response = "抱歉，我需要更明确一些您想买什么。您可以说例如“我要1箱苹果和2袋香蕉”，或者问“苹果多少钱一箱？”"
-            calculation_done = True # 也算处理了，只是没成功
 
-    # 如果没有完成算账，或者不是算账请求，则走通用问答或Gemini
+        elif is_buy_or_price_request: # 尝试了算账但没找到具体物品
+            final_response = "抱歉，我需要更明确一些您想买什么或想查询哪个产品的价格。您可以说例如“我要1箱苹果和2袋香蕉”，或者问“苹果多少钱一箱？”"
+            calculation_done = True
+
     if not calculation_done:
-        # ... (原有的 knowledge_base 查找逻辑) ...
-        # (这个 knowledge_base 主要是关于果蔬营养、挑选、储存的，不是价格)
-        # 我们可以保留它，或者如果算账优先，则可以注释掉这部分，完全依赖Gemini处理非算账问题
-
-        # 决定是否调用Gemini
-        # 如果本地知识库（非价格）有答案，并且用户不是明确问价格/买东西，可以用本地答案
-        # 否则，如果Gemini可用，用Gemini
-        
-        # 简化：如果不是算账，直接走Gemini（如果可用）
         if gemini_model:
             try:
                 system_prompt = (
@@ -306,33 +239,36 @@ def chat():
                     "请避免使用过于刻板或程序化的语言，也不要主动提及自己是AI或模型。你的目标是提供准确、有用的信息，同时让对话感觉轻松愉快。"
                     "专注于水果和蔬菜相关的话题。如果用户询问无关内容，请委婉地引导回果蔬主题。"
                     "如果用户询问具体产品的价格或想下单，请告知你可以帮忙查询价格和计算总额，并引导用户说出想买的产品和数量。"
+                    "如果用户只是打招呼，比如“你好”，请友好回应。"
                 )
                 full_prompt = f"{system_prompt}\\n\\n这是我们目前的产品列表和价格（部分，供你参考）：\\n"
                 limited_catalog_for_prompt = ""
                 count = 0
-                for name, details in PRODUCT_CATALOG.items():
-                    limited_catalog_for_prompt += f"- {name.capitalize()}: ${details['price']:.2f} / {details['original_unit_desc']}\\n"
-                    count += 1
-                    if count >= 10: 
-                        limited_catalog_for_prompt += "...还有更多产品...\\n"
-                        break
-                if not PRODUCT_CATALOG:
-                    limited_catalog_for_prompt = "（目前产品列表为空）\\n"
+                if PRODUCT_CATALOG: # 检查产品目录是否为空
+                    for name_key, details in PRODUCT_CATALOG.items(): # 使用 .items() 遍历字典
+                        # 使用 original_display_name 进行显示
+                        display_name = details.get('original_display_name', name_key.capitalize())
+                        limited_catalog_for_prompt += f"- {display_name}: ${details['price']:.2f} / {details['specification']}\\n"
+                        count += 1
+                        if count >= 10:
+                            limited_catalog_for_prompt += "...还有更多产品...\\n"
+                            break
+                if not PRODUCT_CATALOG or not limited_catalog_for_prompt.strip(): # 再次检查，如果循环后仍然为空
+                    limited_catalog_for_prompt = "（目前产品列表为空或未能成功加载）\\n"
 
                 full_prompt += limited_catalog_for_prompt
                 full_prompt += f"\\n用户问：{user_input}"
                 
-                print(f"Prompt to Gemini: {full_prompt}") # 调试信息
-
+                print(f"Prompt to Gemini: {full_prompt}")
                 gemini_response = gemini_model.generate_content(full_prompt)
-                
-                print(f"Gemini response object: {gemini_response}") # 调试信息
+                print(f"Gemini response object: {gemini_response}")
+
                 if gemini_response and hasattr(gemini_response, 'text') and gemini_response.text:
                     final_response = gemini_response.text
-                    print(f"Gemini response text: {final_response}") 
+                    print(f"Gemini response text: {final_response}")
                 else:
                     print("Gemini response does not have .text attribute or .text is empty.")
-                    final_response = "抱歉，AI助手暂时无法给出回复，请稍后再试。" # 更具体的错误
+                    final_response = "抱歉，AI助手暂时无法给出回复，请稍后再试。"
                     if hasattr(gemini_response, 'prompt_feedback'):
                         print(f"Gemini prompt feedback: {gemini_response.prompt_feedback}")
                     if hasattr(gemini_response, 'candidates') and gemini_response.candidates:
@@ -340,18 +276,17 @@ def chat():
                         if gemini_response.candidates[0].content and gemini_response.candidates[0].content.parts:
                              final_response = "".join(part.text for part in gemini_response.candidates[0].content.parts if hasattr(part, 'text'))
                              print(f"Extracted text from Gemini candidates: {final_response}")
-                             if not final_response.strip(): # 如果从candidates提取的文本也是空的
+                             if not final_response.strip():
                                  final_response = "AI助手收到了回复但内容为空，请尝试换个问法。"
                         else:
                             final_response = "AI助手返回了无法直接解析的回复结构。"
                     else:
                         final_response = "AI助手没有返回预期的文本回复结构。"
-
             except Exception as e:
                 print(f"调用 Gemini API 失败: {e}")
                 final_response = "抱歉，AI助手暂时遇到问题，请稍后再试。"
-        else: # Gemini不可用，且不是算账
-            final_response = "抱歉，我现在无法处理您的请求，也无法连接到我的知识库。请稍后再试。" # 已修正此处的冒号
+        else:
+            final_response = "抱歉，我现在无法处理您的请求，也无法连接到我的知识库。请稍后再试。"
 
     return jsonify({'response': final_response})
 
