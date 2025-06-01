@@ -44,7 +44,7 @@ def load_product_data(file_path="products.csv"): # 更改文件名为 products.c
     global PRODUCT_CATALOG
     PRODUCT_CATALOG = {}
     try:
-        with open(file_path, mode='r', encoding='utf-8', newline='') as csvfile:
+        with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile: # 使用 utf-8-sig 编码
             reader = csv.DictReader(csvfile)
             print(f"--- DEBUG: CSV Headers read by DictReader: {reader.fieldnames} ---") # 新增调试打印
             if not reader.fieldnames or not all(col in reader.fieldnames for col in ['ProductName', 'Specification', 'Price', 'Unit']):
