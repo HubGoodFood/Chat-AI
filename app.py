@@ -139,58 +139,94 @@ def chat():
     calculation_done = False
     final_response = ""
 
-    buy_keywords = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只", "多少钱", "价格"]
-    # is_buy_or_price_request = any(keyword in user_input for keyword in buy_keywords)
-    # 更宽松的匹配：如果用户提到了目录中的产品名，也可能是想问价格或下单
-    mentioned_product_keys = [pk for pk in PRODUCT_CATALOG.keys() if pk.split(' (')[0] in user_input_for_processing or pk in user_input_for_processing]
-    is_buy_or_price_request = any(keyword in user_input for keyword in buy_keywords) or bool(mentioned_product_keys)
+    # 意图识别关键词
+    buy_keywords = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只"]
+    price_query_keywords = ["多少钱", "价格是", "什么价", "价钱"]
+    what_do_you_sell_keywords = ["卖什么", "有什么产品", "商品列表", "菜单"]
 
-    if is_buy_or_price_request and PRODUCT_CATALOG:
-        ordered_items = []
-        total_price = 0
-        found_items_for_billing = False
-        
-        # 改进的产品和数量提取逻辑
-        # 遍历产品目录的键（例如 "新鲜农场玉米 (箱)"）
+    # 检查是否是“卖什么”的请求
+    is_what_do_you_sell_request = any(keyword in user_input_for_processing for keyword in what_do_you_sell_keywords)
+
+    if is_what_do_you_sell_request:
+        if PRODUCT_CATALOG:
+            response_parts = ["我们主要提供以下类别的生鲜和美食："]
+            # 简单分类或列举几个例子
+            # 这里可以根据你的产品特点做得更智能，例如按水果、蔬菜、肉类、熟食等分类
+            # 目前简单列举前几个作为示例
+            count = 0
+            categories = set()
+            example_items = []
+            for key, details in PRODUCT_CATALOG.items():
+                # 尝试从产品名中提取类别 (非常粗略的示例)
+                if "鸡" in details['name'] or "鸭" in details['name']: categories.add("禽类")
+                elif "鱼" in details['name'] or "虾" in details['name'] or "螺" in details['name'] or "蛏" in details['name'] or "蛤" in details['name']: categories.add("海鲜河鲜")
+                elif "菜" in details['name'] or "瓜" in details['name'] or "菇" in details['name'] or "笋" in details['name'] or "姜" in details['name'] or "白" in details['name'] or "菠菜" in details['name'] or "花苔" in details['name'] or "萝卜" in details['name']: categories.add("新鲜蔬菜")
+                elif "果" in details['name'] or "莓" in details['name'] or "橙" in details['name'] or "桃" in details['name'] or "芒" in details['name'] or "龙眼" in details['name'] or "荔枝" in details['name'] or "凤梨" in details['name'] or "葡萄" in details['name'] or "石榴" in details['name'] or "山楂" in details['name'] or "芭乐" in details['name']: categories.add("时令水果")
+                elif "饺" in details['name'] or "饼" in details['name'] or "爪" in details['name'] or "包子" in details['name'] or "花卷" in details['name'] or "生煎" in details['name'] or "燕丸" in details['name'] or "火烧" in details['name'] or "馄炖" in details['name'] or "粽" in details['name'] or "面" in details['name'] : categories.add("美味熟食/面点")
+                
+                if count < 5: # 列举几个例子
+                    example_items.append(details['original_display_name'])
+                count += 1
+            
+            if categories:
+                response_parts.append("主要类别包括：" + "、".join(list(categories)) + "。")
+            if example_items:
+                response_parts.append("例如我们有：" + "、".join(example_items) + " 等。")
+            response_parts.append("您可以问我具体想了解哪一类，或者直接问某个产品的价格哦！")
+            final_response = "\\n".join(response_parts)
+        else:
+            final_response = "抱歉，我们的产品列表暂时还没有加载好，请稍后再问我有什么产品吧！"
+        calculation_done = True # 标记为已处理
+
+    # 算账逻辑 (在非“卖什么”请求之后)
+    if not calculation_done:
+        # 改进：区分纯价格查询和多项购买
+        mentioned_products_in_query = []
         for catalog_key, product_details in PRODUCT_CATALOG.items():
-            product_name_for_match = product_details['name'].lower() # 例如 "新鲜农场玉米"
-            specification_for_match = product_details['specification'].lower() # 例如 "箱"
+            # 匹配产品名（不含规格）或完整带规格的产品名
+            product_base_name_for_match = product_details['name'].lower()
+            if product_base_name_for_match in user_input_for_processing or catalog_key in user_input_for_processing:
+                mentioned_products_in_query.append(catalog_key)
+        
+        is_multi_item_buy_request = any(keyword in user_input_for_processing for keyword in buy_keywords) and len(mentioned_products_in_query) > 1
+        is_single_item_price_query = any(keyword in user_input_for_processing for keyword in price_query_keywords) and len(mentioned_products_in_query) == 1
+        is_single_item_buy_request = any(keyword in user_input_for_processing for keyword in buy_keywords) and len(mentioned_products_in_query) == 1
 
-            # 构造几种可能的匹配模式
-            # 1. 产品名 + 规格 (例如 "玉米箱", "玉米 半箱")
-            # 2. 产品名 (如果规格不突出或用户可能省略)
-            patterns_to_check = []
-            if specification_for_match and specification_for_match != product_name_for_match:
-                patterns_to_check.append(f"{product_name_for_match}.*?{specification_for_match}") # 允许中间有其他字符
-                patterns_to_check.append(f"{product_name_for_match}{specification_for_match}") # 直接连接
-            patterns_to_check.append(product_name_for_match) # 只匹配产品名
-
-            for pattern in patterns_to_check:
-                # 查找产品模式在用户输入中的所有匹配项
-                for match_obj in re.finditer(pattern, user_input_for_processing):
-                    # 尝试在匹配到的产品名前面提取数量
+        if (is_multi_item_buy_request or is_single_item_buy_request) and PRODUCT_CATALOG:
+            ordered_items = []
+            total_price = 0.0
+            found_items_for_billing = False
+            
+            for catalog_key in PRODUCT_CATALOG.keys(): # 使用完整的 key 来匹配
+                product_details = PRODUCT_CATALOG[catalog_key]
+                product_name_for_match = product_details['name'].lower()
+                # 检查用户输入是否包含产品名（不含规格）或完整带规格的产品名
+                # catalog_key 已经是小写了
+                if product_name_for_match in user_input_for_processing or catalog_key in user_input_for_processing:
                     quantity = 1 # 默认数量
-                    # 向前查找数字 (考虑中文数字和阿拉伯数字)
-                    # (?P<num>[\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|瓶|片|块|卷|对|副|套|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*(?={re.escape(match_obj.group(0))})
-                    # 这是一个非常复杂的正则，先简化
-                    # 在匹配到的产品 (match_obj.group(0)) 前面找数字
-                    # 我们需要从 match_obj.start() 向前搜索
-                    search_before_product = user_input_for_processing[:match_obj.start()]
-                    # 从后往前匹配数字和可选的单位词
-                    qty_match_groups = re.search(r'([\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|瓶|片|块|卷|对|副|套|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*$', search_before_product.strip())
+                    # 数量提取逻辑 (可以复用或改进之前的qty_match)
+                    # 简化版：在产品名前找数字
+                    # 注意：这里的product_name_for_match可能不包含规格，而catalog_key包含
+                    # 我们应该基于更明确的匹配来提取数量
                     
-                    if qty_match_groups:
-                        num_str = qty_match_groups.group(1)
-                        # (这里可以加入中文数字转阿拉伯数字的逻辑，暂时简化)
+                    # 尝试匹配 "数字 (可选单位) 产品名(含规格)" 或 "数字 (可选单位) 产品基础名"
+                    # 优先匹配更具体的 catalog_key (如 "新鲜农场玉米 (箱)")
+                    qty_pattern_specific = f"(\\d+)\\s*(?:个|箱|磅|斤|袋|只|把|条|盒|包)?\\s*(?:{re.escape(catalog_key)})"
+                    qty_pattern_base = f"(\\d+)\\s*(?:个|箱|磅|斤|袋|只|把|条|盒|包)?\\s*(?:{re.escape(product_name_for_match)})"
+                    
+                    qty_match = re.search(qty_pattern_specific, user_input_for_processing, re.IGNORECASE)
+                    if not qty_match:
+                        qty_match = re.search(qty_pattern_base, user_input_for_processing, re.IGNORECASE)
+
+                    if qty_match:
                         try:
-                            quantity = int(num_str)
-                        except ValueError: # 如果是中文数字等，暂时无法转换，默认为1
-                            quantity = 1 
+                            quantity = int(qty_match.group(1))
+                        except ValueError:
+                            quantity = 1
                     
-                    # 确保我们使用的是匹配到的 catalog_key
                     item_price = product_details['price']
                     original_display_name = product_details['original_display_name']
-                    original_unit_desc = product_details['specification'] # CSV中的Specification列
+                    original_unit_desc = product_details['specification']
 
                     ordered_items.append({
                         'name': original_display_name.capitalize(),
@@ -201,64 +237,77 @@ def chat():
                     })
                     total_price += quantity * item_price
                     found_items_for_billing = True
-                    # 找到一个匹配后，可以跳出内部pattern循环，避免对同一用户输入段重复添加同一产品
-                    # 但如果用户说“我要玉米，还要一箱玉米”，我们可能需要更复杂的逻辑来去重或合并
-                    # 暂时简化：只要匹配到就添加
+            
+            if found_items_for_billing:
+                # 去重和合并逻辑 (与之前类似)
+                merged_items = {}
+                for item in ordered_items:
+                    key = (item['name'], item['unit_desc'])
+                    if key in merged_items:
+                        merged_items[key]['quantity'] += item['quantity']
+                    else:
+                        merged_items[key] = item
+                ordered_items = list(merged_items.values())
+                total_price = sum(item['quantity'] * item['unit_price'] for item in ordered_items)
+
+                if len(ordered_items) == 1 and is_single_item_price_query and not is_single_item_buy_request: # 单品价格查询
+                    item = ordered_items[0]
+                    final_response = f"{item['name']} ({item['unit_desc']}) 的价格是 ${item['unit_price']:.2f}。"
+                else: # 订单汇总
+                    response_parts = ["好的，这是您的订单详情："]
+                    for item in ordered_items:
+                        item_total = item['quantity'] * item['unit_price']
+                        response_parts.append(f"- {item['name']} x {item['quantity']} ({item['unit_desc']}): ${item['unit_price']:.2f} x {item['quantity']} = ${item_total:.2f}")
+                    response_parts.append(f"总计：${total_price:.2f}")
+                    final_response = "\\n".join(response_parts)
+                calculation_done = True
+            elif is_multi_item_buy_request or is_single_item_buy_request or is_single_item_price_query: # 尝试了但没找到
+                final_response = "抱歉，我没有在菜单中找到您提到的所有产品。您可以看看我们的产品列表，或者换个方式问我哦。"
+                calculation_done = True
         
-        # 去重 ordered_items (基于 name 和 unit_desc 组合，并合并数量)
-        if found_items_for_billing:
-            merged_items = {}
-            for item in ordered_items:
-                key = (item['name'], item['unit_desc'])
-                if key in merged_items:
-                    merged_items[key]['quantity'] += item['quantity']
-                    merged_items[key]['total'] += item['total'] # 这里应该是 item_price * 新quantity，或者直接累加total
-                else:
-                    merged_items[key] = item
-            ordered_items = list(merged_items.values())
-            # 重新计算总价，因为数量可能合并了
-            total_price = sum(item['quantity'] * item['unit_price'] for item in ordered_items)
+        elif is_single_item_price_query and PRODUCT_CATALOG: # 单独处理只问价格但没匹配到产品的情况
+            # 检查是否提到了某个产品，但该产品不在目录中
+            product_mentioned_but_not_found = True # 假设提到了但没找到
+            if not mentioned_products_in_query: # 如果根本没提到任何已知产品词根
+                 product_mentioned_but_not_found = False
 
-            response_parts = ["好的，这是您的订单详情："]
-            for item in ordered_items:
-                # 更新小计的计算方式
-                item_total = item['quantity'] * item['unit_price']
-                response_parts.append(f"- {item['name']} x {item['quantity']} ({item['unit_desc']}): ${item['unit_price']:.2f} x {item['quantity']} = ${item_total:.2f}")
-            response_parts.append(f"总计：${total_price:.2f}")
-            final_response = "\\n".join(response_parts)
+            if product_mentioned_but_not_found:
+                final_response = "抱歉，我没有找到您查询的产品。您可以看看我们的产品列表，或者问问其他产品？"
+            else:
+                 final_response = "您想查询哪个产品的价格呢？可以说出产品名称哦。"
             calculation_done = True
 
-        elif is_buy_or_price_request: # 尝试了算账但没找到具体物品
-            final_response = "抱歉，我需要更明确一些您想买什么或想查询哪个产品的价格。您可以说例如“我要1箱苹果和2袋香蕉”，或者问“苹果多少钱一箱？”"
-            calculation_done = True
-
+    # 如果没有完成算账，或者不是算账请求，则走通用问答或Gemini
     if not calculation_done:
         if gemini_model:
             try:
                 system_prompt = (
-                    "你是一位经验丰富的果蔬营养顾问和生鲜采购专家。请用自然、亲切且专业的口吻与用户交流，就像与一位朋友分享专业的果蔬知识一样。"
-                    "请避免使用过于刻板或程序化的语言，也不要主动提及自己是AI或模型。你的目标是提供准确、有用的信息，同时让对话感觉轻松愉快。"
-                    "专注于水果和蔬菜相关的话题。如果用户询问无关内容，请委婉地引导回果蔬主题。"
-                    "如果用户询问具体产品的价格或想下单，请告知你可以帮忙查询价格和计算总额，并引导用户说出想买的产品和数量。"
+                    "你是一位经验丰富的果蔬营养顾问和生鲜采购专家。请用自然、亲切且专业的口吻与用户交流。"
+                    "避免刻板的AI语言。你的目标是提供准确、有用的信息，让对话感觉轻松愉快。"
+                    "专注于水果、蔬菜及相关农产品。如果用户询问无关内容，请委婉引导回主题。"
+                    "如果用户问你有什么产品，你可以简单介绍一下主要类别，并鼓励用户问具体产品。"
+                    "如果用户询问具体产品的价格或想下单，请根据产品目录信息准确回答。如果产品不在目录中，请礼貌告知。"
                     "如果用户只是打招呼，比如“你好”，请友好回应。"
                 )
-                full_prompt = f"{system_prompt}\\n\\n这是我们目前的产品列表和价格（部分，供你参考）：\\n"
-                limited_catalog_for_prompt = ""
-                count = 0
-                if PRODUCT_CATALOG: # 检查产品目录是否为空
-                    for name_key, details in PRODUCT_CATALOG.items(): # 使用 .items() 遍历字典
-                        # 使用 original_display_name 进行显示
+                full_prompt = f"{system_prompt}"
+                
+                # 只有在非明确的“卖什么”请求，且产品目录非空时，才附加产品列表给Gemini
+                if not is_what_do_you_sell_request and PRODUCT_CATALOG:
+                    full_prompt += "\\n\\n作为参考，这是我们目前的部分产品列表和价格：\\n"
+                    limited_catalog_for_prompt = ""
+                    count = 0
+                    for name_key, details in PRODUCT_CATALOG.items():
                         display_name = details.get('original_display_name', name_key.capitalize())
                         limited_catalog_for_prompt += f"- {display_name}: ${details['price']:.2f} / {details['specification']}\\n"
                         count += 1
-                        if count >= 10:
+                        if count >= 5: # 减少给Gemini的列表长度
                             limited_catalog_for_prompt += "...还有更多产品...\\n"
                             break
-                if not PRODUCT_CATALOG or not limited_catalog_for_prompt.strip(): # 再次检查，如果循环后仍然为空
-                    limited_catalog_for_prompt = "（目前产品列表为空或未能成功加载）\\n"
-
-                full_prompt += limited_catalog_for_prompt
-                full_prompt += f"\\n用户问：{user_input}"
+                    if not limited_catalog_for_prompt.strip():
+                        limited_catalog_for_prompt = "（目前产品列表参考信息未能加载）\\n"
+                    full_prompt += limited_catalog_for_prompt
+                
+                full_prompt += f"\\n\\n用户的问题是：\\\"{user_input}\\\""
                 
                 print(f"Prompt to Gemini: {full_prompt}")
                 gemini_response = gemini_model.generate_content(full_prompt)
@@ -286,7 +335,7 @@ def chat():
             except Exception as e:
                 print(f"调用 Gemini API 失败: {e}")
                 final_response = "抱歉，AI助手暂时遇到问题，请稍后再试。"
-        else:
+        else: # Gemini不可用，且不是算账
             final_response = "抱歉，我现在无法处理您的请求，也无法连接到我的知识库。请稍后再试。"
 
     return jsonify({'response': final_response})
