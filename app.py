@@ -160,6 +160,9 @@ def chat():
     user_input = request.json.get('message', '')
     user_input_for_processing = user_input.lower() # 用于本地处理转小写
     
+    print(f"--- New chat request --- User input: {user_input}") # 调试信息
+    print(f"Gemini model object: {gemini_model}") # 调试信息：检查模型对象
+
     response_from_local_kb = None
     calculation_done = False
     
@@ -288,13 +291,12 @@ def chat():
                     "如果用户询问具体产品的价格或想下单，请告知你可以帮忙查询价格和计算总额，并引导用户说出想买的产品和数量。"
                 )
                 full_prompt = f"{system_prompt}\\n\\n这是我们目前的产品列表和价格（部分，供你参考）：\\n"
-                # 只给Gemini看一部分产品作为例子，避免prompt过长
                 limited_catalog_for_prompt = ""
                 count = 0
                 for name, details in PRODUCT_CATALOG.items():
                     limited_catalog_for_prompt += f"- {name.capitalize()}: ${details['price']:.2f} / {details['original_unit_desc']}\\n"
                     count += 1
-                    if count >= 10: # 最多显示10条给Gemini作为格式参考
+                    if count >= 10: 
                         limited_catalog_for_prompt += "...还有更多产品...\\n"
                         break
                 if not PRODUCT_CATALOG:
@@ -302,14 +304,37 @@ def chat():
 
                 full_prompt += limited_catalog_for_prompt
                 full_prompt += f"\\n用户问：{user_input}"
+                
+                print(f"Prompt to Gemini: {full_prompt}") # 调试信息
 
                 gemini_response = gemini_model.generate_content(full_prompt)
-                final_response = gemini_response.text
+                
+                print(f"Gemini response object: {gemini_response}") # 调试信息
+                if gemini_response and hasattr(gemini_response, 'text') and gemini_response.text:
+                    final_response = gemini_response.text
+                    print(f"Gemini response text: {final_response}") 
+                else:
+                    print("Gemini response does not have .text attribute or .text is empty.")
+                    final_response = "抱歉，AI助手暂时无法给出回复，请稍后再试。" # 更具体的错误
+                    if hasattr(gemini_response, 'prompt_feedback'):
+                        print(f"Gemini prompt feedback: {gemini_response.prompt_feedback}")
+                    if hasattr(gemini_response, 'candidates') and gemini_response.candidates:
+                        print(f"Gemini candidates: {gemini_response.candidates}")
+                        if gemini_response.candidates[0].content and gemini_response.candidates[0].content.parts:
+                             final_response = "".join(part.text for part in gemini_response.candidates[0].content.parts if hasattr(part, 'text'))
+                             print(f"Extracted text from Gemini candidates: {final_response}")
+                             if not final_response.strip(): # 如果从candidates提取的文本也是空的
+                                 final_response = "AI助手收到了回复但内容为空，请尝试换个问法。"
+                        else:
+                            final_response = "AI助手返回了无法直接解析的回复结构。"
+                    else:
+                        final_response = "AI助手没有返回预期的文本回复结构。"
+
             except Exception as e:
                 print(f"调用 Gemini API 失败: {e}")
                 final_response = "抱歉，AI助手暂时遇到问题，请稍后再试。"
         else: # Gemini不可用，且不是算账
-            final_response = "抱歉，我现在无法处理您的请求，也无法连接到我的知识库。请稍后再试。"
+            final_response = "抱歉，我现在无法处理您的请求，也无法连接到我的知识库。请稍后再试。" # 已修正此处的冒号
 
     return jsonify({'response': final_response})
 
