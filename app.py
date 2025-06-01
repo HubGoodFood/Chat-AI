@@ -9,19 +9,32 @@ print(" Flask app object created. ")
 
 # 从环境变量中获取 API 密钥
 GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY')
-print(f"--- STARTUP CHECK: GOOGLE_API_KEY from env is {'SET' if GEMINI_API_KEY else 'NOT SET'} ---") # 新增的调试打印
+print(f"--- STARTUP CHECK: GOOGLE_API_KEY from env is {'SET' if GEMINI_API_KEY else 'NOT SET'} ---")
 if not GEMINI_API_KEY:
     print("警告：未找到 GOOGLE_API_KEY 环境变量。Gemini API 将无法使用。")
-    # 你可以在这里决定是完全禁用 Gemini 功能，还是允许应用在没有 API 密钥的情况下运行（但会报错）
 else:
+    print(f"--- API Key found. Attempting genai.configure() ---") # 新增
     try:
         genai.configure(api_key=GEMINI_API_KEY)
+        print("--- genai.configure() SUCCEEDED ---") # 新增
     except Exception as e:
         print(f"配置 Gemini API 失败: {e}")
         GEMINI_API_KEY = None # 配置失败则禁用
 
 # 初始化 Gemini 模型 (如果API密钥有效)
 gemini_model = None
+print(f"--- Before model initialization: GEMINI_API_KEY is {'SET' if GEMINI_API_KEY else 'NOT SET (possibly due to configure failure or never set)'} ---") # 新增
+if GEMINI_API_KEY:
+    print(f"--- Attempting genai.GenerativeModel('gemini-1.5-flash') ---") # 更改模型名称
+    try:
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash') # 更改为 'gemini-1.5-flash'
+        print(f"--- genai.GenerativeModel() SUCCEEDED. gemini_model is now: {gemini_model} ---") # 新增
+    except Exception as e:
+        print(f"初始化 Gemini 模型失败: {e}")
+        gemini_model = None
+else:
+    print("--- Skipping genai.GenerativeModel() because GEMINI_API_KEY is NOT SET ---") # 新增
+
 # 全局变量来存储产品数据
 PRODUCT_CATALOG = {}
 
