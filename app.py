@@ -4,6 +4,8 @@ import google.generativeai as genai
 import re
 
 app = Flask(__name__)
+print(" Flask app script is starting up... ")
+print(" Flask app object created. ")
 
 # 从环境变量中获取 API 密钥
 GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY')
@@ -65,7 +67,7 @@ def parse_price_unit(price_str, unit_str):
         return None, None, 1 #解析失败
 
 def load_product_data(file_path="products.txt"):
-    """加载并解析产品数据文件"""
+    print("Attempting to load product data...")
     global PRODUCT_CATALOG
     PRODUCT_CATALOG = {}
     try:
@@ -157,6 +159,7 @@ def index():
 
 @app.route('/chat', methods=['POST'])
 def chat():
+    print("--- Chat route entered ---")
     user_input = request.json.get('message', '')
     user_input_for_processing = user_input.lower() # 用于本地处理转小写
     
