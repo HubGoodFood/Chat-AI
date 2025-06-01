@@ -7,54 +7,56 @@
     <style>
         html {
             height: 100%;
-            overflow: hidden; /* Prevent scrolling of the html element */
+            overflow: hidden;
         }
         body {
-            height: 100%; /* Make body take full height of html */
+            height: 100%; 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
             display: flex;
             flex-direction: column;
-            /* align-items: center; Removed for better full-width control, centering #chatContainer via margin */
             margin: 0;
-            /* padding: 10px; Will be handled by media query or #chatContainer */
             background-color: #f4f7f6;
             color: #333;
             box-sizing: border-box;
-            overflow: hidden; /* Prevent body from scrolling; scrolling handled by #chatbox */
+            overflow: hidden;
         }
         h1 {
             color: #4CAF50;
-            margin-top: 15px;
-            margin-bottom: 15px;
+            margin: 15px 0;
             font-size: 1.8em;
-            text-align: center; /* Ensure h1 is centered */
-            flex-shrink: 0; /* Prevent h1 from shrinking */
-            padding-left: 10px; /* Add some padding if body padding is removed */
-            padding-right: 10px;
+            text-align: center;
+            flex-shrink: 0;
+            padding: 0 10px;
+            width: 100%; 
+            box-sizing: border-box; 
         }
         #chatContainer {
             width: 100%;
-            max-width: 600px; /* Max width for desktop */
-            margin-left: auto; /* Center #chatContainer on larger screens */
-            margin-right: auto; /* Center #chatContainer on larger screens */
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
             background-color: #fff;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             display: flex;
             flex-direction: column;
-            flex-grow: 1; /* Critical: takes up remaining vertical space in body */
-            overflow: hidden; /* Child #chatbox will scroll */
+            flex-grow: 1;
+            overflow: hidden; 
+            padding: 0 10px 10px 10px; 
+            box-sizing: border-box;
         }
         #chatbox {
-            flex-grow: 1; /* Critical: takes up remaining vertical space in #chatContainer */
-            overflow-y: auto; /* Enables scrolling for chat messages */
+            flex-grow: 1;
+            overflow-y: auto;
             padding: 15px;
-            /* border-bottom: 1px solid #eee; Moved to #inputArea top border */
+            background-color: #fff; 
+            border-bottom: 1px solid #eee;
         }
         #chatbox p {
             margin: 0 0 12px 0;
             line-height: 1.5;
             font-size: 0.95em;
+            word-wrap: break-word; 
         }
         #chatbox p b {
             color: #4CAF50;
@@ -66,8 +68,10 @@
             display: flex;
             padding: 10px;
             background-color: #f9f9f9;
-            border-top: 1px solid #eee; /* Separator line */
-            flex-shrink: 0; /* Prevent input area from shrinking */
+            border-top: 1px solid #eee;
+            flex-shrink: 0;
+            box-sizing: border-box; 
+            width: 100%;
         }
         #userInput {
             flex-grow: 1;
@@ -99,19 +103,15 @@
 
         /* 针对小屏幕的媒体查询 */
         @media (max-width: 600px) {
-            body {
-                padding: 0; /* Remove body padding on small screens */
+            h1 {
+                font-size: 1.5em;
+                margin: 10px 0;
+                padding: 0 5px; 
             }
             #chatContainer {
                 border-radius: 0;
-                max-width: 100%; /* Ensure it takes full width */
-                /* width: 100%; Is implicit with max-width: 100% and flex behavior */
-                /* height related properties are now handled by flex-grow */
-            }
-            h1 {
-                font-size: 1.5em;
-                margin-top: 10px;
-                margin-bottom: 10px;
+                max-width: 100%;
+                padding: 0; 
             }
             #chatbox {
                 padding: 10px;

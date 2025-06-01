@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, render_template
 import os
 import google.generativeai as genai
+import re
 
 app = Flask(__name__)
 
@@ -18,12 +19,137 @@ else:
 
 # 初始化 Gemini 模型 (如果API密钥有效)
 gemini_model = None
-if GEMINI_API_KEY:
+# 全局变量来存储产品数据
+PRODUCT_CATALOG = {}
+
+def parse_price_unit(price_str, unit_str):
+    """尝试解析价格和单位，处理多种格式"""
     try:
-        gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest') # 更改模型名称
+        price = float(re.findall(r"\d+\.?\d*", price_str)[0])
+        unit = unit_str.strip().lower()
+        # 尝试标准化单位，例如 '2磅' -> '磅'
+        unit_match = re.search(r"([a-zA-Z\u4e00-\u9fa5]+)", unit) # 匹配字母和中文字符作为单位
+        if unit_match:
+            unit = unit_match.group(1)
+        
+        quantity_match = re.search(r"(\d+)\s*" + re.escape(unit), price_str, re.IGNORECASE)
+        if not quantity_match: # 如果价格字符串中没有数量，尝试从单位字符串中找
+             quantity_match = re.search(r"(\d+)\s*" + re.escape(unit), unit_str, re.IGNORECASE)
+
+        quantity = 1 # 默认为1个单位
+        if quantity_match:
+            # This part is tricky due to varied formats like "25个", "2包x400g"
+            # For now, let's try a simple extraction if the format is like "25个"
+            simple_qty_match = re.match(r"(\d+)", unit_str)
+            if simple_qty_match:
+                try:
+                    quantity = int(simple_qty_match.group(1))
+                except ValueError:
+                    pass #保持quantity为1
+        
+        # 对于 "23/2只" 这样的格式，尝试提取数量和单位
+        if '/' in price_str and '只' in price_str: #非常特定的规则
+            parts = price_str.split('/')
+            if len(parts) == 2:
+                try:
+                    price = float(parts[0])
+                    if '只' in parts[1]:
+                        unit = '只'
+                        quantity = int(re.findall(r"\d+", parts[1])[0])
+                except ValueError:
+                    pass
+
+
+        return price, unit, quantity
+    except:
+        return None, None, 1 #解析失败
+
+def load_product_data(file_path="products.txt"):
+    """加载并解析产品数据文件"""
+    global PRODUCT_CATALOG
+    PRODUCT_CATALOG = {}
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("🌸") or line.startswith("🪷") or line.startswith("💥") or "===" in line or "本周蔬菜水果" in line or "保证质量" in line:
+                    continue
+
+                # 尝试更灵活地匹配产品名称、价格和单位
+                # 这个正则表达式需要根据实际文件格式不断调整和优化
+                # 基本思路：(产品名) ($价格) (/单位描述) (可选的第二个价格/单位)
+                # 例如: 农场素食散养走地萨松母鸡$23.99/只
+                #       谭头水饺$25/袋
+                #       新鲜农场玉米$30/箱，18/半箱
+                #       农场新鲜平菇 $23/3磅，35/5磅
+                
+                # 先移除行号和特殊标记如 "1. ✨"
+                line = re.sub(r"^\d+\.\\s*✨?\\s*", "", line).strip()
+                line = re.sub(r"✨", "", line).strip() # 移除所有✨
+                line = re.sub(r"💕", "", line).strip() # 移除所有💕
+                line = re.sub(r"❗️", "", line).strip() # 移除所有❗️
+
+                # 分割多种规格的产品
+                items = re.split(r'[，]\s*|\s+-\s+', line) # 用中文逗号或 " - " 分割
+                
+                base_product_name = ""
+
+                for i, item_part in enumerate(items):
+                    item_part = item_part.strip()
+                    if not item_part:
+                        continue
+
+                    # 匹配 "产品名$价格/单位" 或 "产品名 价格/单位"
+                    match = re.match(r"(.+?)(?:\\s*\\$|\\s+)(\\d+\\.?\\d+)\\s*/\\s*(.+)", item_part)
+                    
+                    if not match: # 尝试另一种格式 "产品名$价格单位" (例如 $29/2版)
+                        match = re.match(r"(.+?)(?:\\s*\\$|\\s+)(\\d+\\.?\\d+)([a-zA-Z\u4e00-\u9fa5\\d/磅]+)", item_part)
+
+
+                    if match:
+                        product_name_full = match.group(1).strip()
+                        price_str = match.group(2).strip()
+                        unit_desc_full = match.group(3).strip()
+
+                        # 如果是多规格的第一部分，设定为基础产品名
+                        if i == 0:
+                            base_product_name = product_name_full
+                        else: # 如果是后续规格，且没有明确产品名，则使用基础产品名
+                            # 检查后续部分是否也包含一个看起来像产品名的部分
+                            # 这是一个简化处理，可能需要更复杂的逻辑来判断是否是全新的产品名
+                            if not any(char.isdigit() or char == '$' for char in product_name_full.split()[0]): # 如果第一部分不像价格
+                                base_product_name = product_name_full # 更新基础产品名
+
+                        price, unit, quantity_in_unit_desc = parse_price_unit(price_str, unit_desc_full)
+
+                        if price is not None and unit is not None:
+                            # 构建一个唯一的key，结合基础产品名和单位描述（处理"半箱"等情况）
+                            # 对于 "农场新鲜玉米$30/箱，18/半箱"，unit_desc_full 会是 "箱" 和 "半箱"
+                            # 我们希望产品名能区分它们
+                            current_item_name = base_product_name
+                            if "半" in unit_desc_full and "箱" in unit_desc_full : #特定处理半箱
+                                current_item_name = f"{base_product_name} (半箱)"
+                                unit = "半箱"
+                            elif "半" in unit_desc_full and "磅" in unit_desc_full:
+                                current_item_name = f"{base_product_name} (半磅)"
+                                unit = "半磅"
+                            # 更多类似规则可以添加
+
+                            # 如果单位描述中已经包含了数量，例如 "25个"，则price是这25个的总价
+                            # 我们需要计算单个的价格
+                            # single_item_price = price / quantity_in_unit_desc if quantity_in_unit_desc > 0 else price
+                            
+                            # 存储时，我们存储的是 unit_desc_full 这个单位的价格
+                            PRODUCT_CATALOG[current_item_name.lower()] = {'price': price, 'unit': unit, 'original_unit_desc': unit_desc_full}
+                            # print(f"Loaded: {current_item_name.lower()} - Price: {price}, Unit: {unit}, Original Unit Desc: {unit_desc_full}")
+
+    except FileNotFoundError:
+        print(f"错误: 产品文件 {file_path} 未找到。")
     except Exception as e:
-        print(f"初始化 Gemini 模型失败: {e}")
-        gemini_model = None
+        print(f"加载产品数据时出错: {e}")
+
+# 应用启动时加载产品数据
+load_product_data()
 
 @app.route('/')
 def index():
@@ -31,127 +157,159 @@ def index():
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    user_input = request.json.get('message', '') # 保持小写转换，但 Gemini 可能对大小写敏感，具体看模型
+    user_input = request.json.get('message', '')
+    user_input_for_processing = user_input.lower() # 用于本地处理转小写
+    
     response_from_local_kb = None
+    calculation_done = False
+    
+    # 尝试解析算账请求
+    # 简化版：寻找 "买/要/订单" 和 "多少钱/总价/一共" 等关键词
+    buy_keywords = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只"]
+    price_keywords = ["多少钱", "总价", "一共", "结算", "算一下"]
 
-    # 1. 首先尝试从本地知识库查找答案
-    # 更智能的果蔬知识库
-    knowledge_base = {
-        "苹果": {
-            "营养": "苹果富含维生素C和纤维，有助于消化和增强免疫力。",
-            "挑选": "挑选苹果时，应选择表皮光滑、色泽均匀、握起来比较硬实的。",
-            "储存": "苹果可以在室温下保存几天，或者在冰箱冷藏可以保存更长时间。"
-        },
-        "香蕉": {
-            "营养": "香蕉是钾的良好来源，有助于维持心脏健康和肌肉功能。",
-            "挑选": "选择表皮金黄、没有太多黑斑的香蕉。如果想放久一点，可以选稍青一些的。",
-            "储存": "香蕉应在室温下保存，避免放入冰箱，否则表皮会变黑。"
-        },
-        "橘子": {
-            "营养": "橘子含有丰富的维生素C，可以帮助预防感冒。",
-            "挑选": "挑选时选择果皮有光泽，果蒂新鲜，拿在手里有分量的橘子。",
-            "储存": "橘子可以在阴凉通风处保存，也可以放入冰箱冷藏。"
-        },
-        "葡萄": {
-            "营养": "葡萄含有抗氧化剂，对皮肤和心脏都有好处。",
-            "挑选": "选择果粒饱满、颜色鲜艳、果梗新鲜的葡萄串。",
-            "储存": "葡萄最好放入冰箱冷藏，并在几天内食用完毕。"
-        },
-        "草莓": {
-            "营养": "草莓是维生素C和锰的良好来源，味道也很棒！",
-            "挑选": "选择颜色鲜红、有光泽、果蒂新鲜的草莓，避免选择过软或有损伤的。",
-            "储存": "草莓非常娇嫩，最好放入冰箱冷藏，并尽快食用。"
-        },
-        "蓝莓": {
-            "营养": "蓝莓富含抗氧化剂，对大脑健康有益。",
-            "挑选": "选择果实饱满、颜色呈深蓝色或蓝紫色、表面有一层白色果粉的蓝莓。",
-            "储存": "蓝莓应放入冰箱冷藏，食用前再清洗。"
-        },
-        "西瓜": {
-            "营养": "西瓜水分充足，是夏天解暑的好选择。",
-            "挑选": "挑选西瓜时，可以看瓜皮纹路清晰、瓜蒂新鲜卷曲、拍起来声音清脆的。",
-            "储存": "完整的西瓜可以在室温下保存，切开后需用保鲜膜包好放入冰箱。"
-        },
-        "白菜": {
-            "营养": "白菜富含维生素K和维生素C，是一种非常健康的蔬菜。",
-            "挑选": "选择叶片完整、颜色鲜嫩、根部结实的白菜。",
-            "储存": "白菜可以在阴凉通风处保存，或者用保鲜膜包裹后放入冰箱冷藏。"
-        },
-        "胡萝卜": {
-            "营养": "胡萝卜富含β-胡萝卜素，对眼睛健康非常有益。",
-            "挑选": "选择表面光滑、颜色鲜艳、形状规整、有一定硬度的胡萝卜。",
-            "储存": "胡萝卜可以去除顶部的叶子后，放入冰箱冷藏。"
-        },
-        "西兰花": {
-            "营养": "西兰花是一种营养丰富的十字花科蔬菜，含有多种维生素和矿物质。",
-            "挑选": "选择花球紧密、颜色鲜绿、没有黄化或开花的西兰花。",
-            "储存": "西兰花可以用保鲜袋装好放入冰箱冷藏。"
-        },
-        "菠菜": {
-            "营养": "菠菜富含铁质和维生素A，有助于补血和保护视力。",
-            "挑选": "选择叶片鲜嫩、颜色深绿、没有黄叶或腐烂的菠菜。",
-            "储存": "菠菜可以用湿纸巾包裹后放入保鲜袋，再放入冰箱冷藏。"
-        },
-        "番茄": {
-            "营养": "番茄（西红柿）富含番茄红素，是一种强大的抗氧化剂。",
-            "挑选": "选择颜色鲜红、果形圆润、表面有光泽的番茄。",
-            "储存": "未完全成熟的番茄可以在室温下催熟，成熟后放入冰箱冷藏。"
-        },
-        "黄瓜": {
-            "营养": "黄瓜水分含量高，热量低，非常适合夏天食用。",
-            "挑选": "选择表皮鲜绿、有光泽、瓜身挺直、带有小刺的黄瓜。",
-            "储存": "黄瓜可以用保鲜膜包裹后放入冰箱冷藏。"
-        }
-    }
+    is_buy_request = any(keyword in user_input for keyword in buy_keywords)
+    is_price_request = any(keyword in user_input for keyword in price_keywords)
 
-    found_specific_in_local_kb = False
-    user_input_lower = user_input.lower()
-    for item_name, item_info in knowledge_base.items():
-        if item_name.lower() in user_input_lower:
-            if "挑选" in user_input_lower or "怎么选" in user_input_lower:
-                response_from_local_kb = f"关于{item_name}的挑选技巧：{item_info.get('挑选', '我暂时还没有这方面的信息。')}"
-            elif "储存" in user_input_lower or "怎么保存" in user_input_lower:
-                response_from_local_kb = f"关于{item_name}的储存方法：{item_info.get('储存', '我暂时还没有这方面的信息。')}"
-            else:
-                response_from_local_kb = f"{item_name}是很棒的选择！{item_info.get('营养', '它是一种健康的食物。')}"
-            found_specific_in_local_kb = True
-            break
+    if is_buy_request or (is_price_request and any(prod.lower() in user_input_for_processing for prod in PRODUCT_CATALOG.keys())):
+        # 这是一个可能的算账请求
+        # 提取物品和数量 (这是一个非常简化的提取，实际需要更复杂的NLP)
+        ordered_items = []
+        total_price = 0
+        found_items_for_billing = False
 
-    if not found_specific_in_local_kb:
-        if '水果' in user_input_lower:
-            response_from_local_kb = "水果美味又健康！你最喜欢什么水果？或者可以问我一些具体的水果，比如苹果、香蕉，也可以问我它们的挑选或储存方法。"
-        elif '蔬菜' in user_input_lower:
-            response_from_local_kb = "蔬菜对身体很好！你最喜欢什么蔬菜？或者可以问我一些具体的蔬菜，比如白菜、胡萝卜，也可以问我它们的挑选或储存方法。"
-        # 如果本地知识库没有找到特定答案，我们将依赖 Gemini
-
-    # 2. 如果本地知识库没有答案，或者我们想让 Gemini 补充，则调用 Gemini API
-    final_response = "抱歉，我暂时无法回答这个问题。"
-    if gemini_model: # 检查模型是否成功初始化
-        try:
-            # 构建给 Gemini 的提示
-            system_prompt = (
-                "你是一位经验丰富的果蔬营养顾问和生鲜采购专家。请用自然、亲切且专业的口吻与用户交流，就像与一位朋友分享专业的果蔬知识一样。"
-                "请避免使用过于刻板或程序化的语言，也不要主动提及自己是AI或模型。你的目标是提供准确、有用的信息，同时让对话感觉轻松愉快。"
-                "专注于水果和蔬菜相关的话题。如果用户询问无关内容，请委婉地引导回果蔬主题。"
-            )
-            full_prompt = f"{system_prompt}\n\n用户问：{user_input}"
+        # 尝试从用户输入中提取数量和产品
+        # 例如: "我要1箱玉米和2个苹果"
+        # 这个正则表达式需要非常小心地构建和测试
+        # (数量) (单位/可选) (产品名)
+        # \s*([0-9.]+)\s*(箱|个|磅|lb|袋|只|把|版|斤|条)?\s*([一-龥a-zA-Z\s]+(?:（半箱）|（半磅）)?)
+        # (?:(?P<quantity>[0-9.]+)\s*(?P<unit>箱|个|磅|lb|袋|只|把|版|斤|条|盒|包)?\s*)?(?P<name>[一-龥a-zA-Z\s()（）]+)
+        
+        # 更简单的逐个产品匹配
+        potential_order_details = []
+        for product_key in PRODUCT_CATALOG.keys():
+            # 尝试匹配 "数字+单位+产品名" 或 "数字+产品名" 或 "产品名"
+            # 这里的product_key是小写的
+            # 为了匹配 "1箱玉米", product_key 应该是 "农场新鲜玉米" 或 "农场新鲜玉米 (半箱)"
+            # 我们需要从 product_key 中去掉括号里的描述部分来做初步匹配
             
-            # 如果本地知识库有初步答案，可以将其作为上下文提供给 Gemini (可选)
-            if response_from_local_kb and response_from_local_kb != "我现在只能聊水果和蔬菜。跟我说说水果或蔬菜吧！或者问我某种果蔬的挑选技巧或储存方法。":
-                 full_prompt += f"\n\n（我这里有一些关于此话题的基础信息：{response_from_local_kb} 你可以参考这个，并用更自然、更专业的方式来丰富和解答。）"
+            product_base_name_for_match = product_key.split(' (')[0]
 
-            gemini_response = gemini_model.generate_content(full_prompt)
-            final_response = gemini_response.text
-        except Exception as e:
-            print(f"调用 Gemini API 失败: {e}")
-            # 如果 Gemini 调用失败，可以回退到本地知识库的答案（如果有）或通用错误信息
-            if response_from_local_kb:
-                final_response = response_from_local_kb + " (Gemini AI 暂时无法连接，以上是本地信息)"
-            else:
+            # 1. 尝试匹配 "数字 单位 产品名" (例如 "1 箱 玉米")
+            # 2. 尝试匹配 "数字产品名" (例如 "1玉米", "1个玉米") - 这比较难，因为单位可能嵌入
+            # 3. 尝试匹配 "产品名" (默认数量为1)
+            
+            # 简化逻辑：如果用户输入包含产品名(小写)
+            if product_base_name_for_match in user_input_for_processing:
+                # 尝试提取数量，默认为1
+                quantity = 1
+                # 尝试匹配 "数字(可选的小数) + (可选的空格) + (可选的单位) + (可选的空格) + 产品名"
+                # 例如 "我要 2 箱 农场新鲜玉米" 或 "我要 两 箱 农场新鲜玉米"
+                # 或者 "2农场新鲜玉米"
+                # 这个正则非常复杂，先用一个简化的
+                
+                # 查找产品名前面的数字
+                # (?:^|\s+|和|与)([0-9一二三四五六七八九十百千万俩两]+)\s*(?:个|箱|磅|袋|只|把|条|盒|包|斤)?\s*(?={product_base_name_for_match})
+                # (?P<quantity_num>[0-9一二三四五六七八九十百千万俩两]+)\s*(?P<unit_word>个|箱|磅|袋|只|把|条|盒|包|斤)?\s*(?={product_base_name_for_match})
+                
+                # 简化：直接在产品名前面找数字，忽略单位词匹配
+                # \b(\d+)\s*(?:个|箱|磅|斤|袋|只|把|条|盒|包)?\s*{product_base_name_for_match}
+                qty_match = re.search(f"(\\d+)\\s*(?:个|箱|磅|斤|袋|只|把|条|盒|包)?\\s*(?:{re.escape(product_base_name_for_match)})", user_input_for_processing, re.IGNORECASE)
+                if qty_match:
+                    try:
+                        quantity = int(qty_match.group(1))
+                    except ValueError:
+                        quantity = 1 # 如果转换失败，默认为1
+                
+                # 检查是否是特定规格，如 "半箱"
+                current_product_lookup_key = product_key # 默认使用完整key (可能包含 " (半箱)")
+                if f"{product_base_name_for_match} (半箱)" in PRODUCT_CATALOG and "半箱" in user_input_for_processing and product_base_name_for_match in user_input_for_processing:
+                    current_product_lookup_key = f"{product_base_name_for_match} (半箱)"
+                elif f"{product_base_name_for_match} (半磅)" in PRODUCT_CATALOG and "半磅" in user_input_for_processing and product_base_name_for_match in user_input_for_processing:
+                     current_product_lookup_key = f"{product_base_name_for_match} (半磅)"
+                # ...可以为其他规格添加更多elif
+
+                if current_product_lookup_key in PRODUCT_CATALOG:
+                    item_price = PRODUCT_CATALOG[current_product_lookup_key]['price']
+                    item_unit = PRODUCT_CATALOG[current_product_lookup_key]['unit']
+                    original_unit_desc = PRODUCT_CATALOG[current_product_lookup_key]['original_unit_desc']
+
+                    # 如果用户明确指定了单位，且该单位与产品目录中的单位不同，但价格是基于目录单位的
+                    # 例如用户说 "1个苹果"，但价格是 "苹果 $5/磅" -> 这种情况目前难以处理
+                    # 我们假设用户说的单位和数量是针对产品目录中记录的那个单位的
+                    
+                    # 修正：如果original_unit_desc包含数量，例如 "25个"，那么item_price是这25个的总价
+                    # 我们需要的是单个的平均价格，或者说，如果用户要“1份”，那就是这个总价
+                    # 这里的逻辑是，如果用户说 "1份小笼包"，而小笼包是 "$20/25个"，那么价格是20
+                    # 如果用户说 "50个小笼包"，我们需要识别出 "2份"
+                    
+                    # 简化：目前假设用户说的数量是针对 listed unit_desc 的数量
+                    # 例如，用户说 "2箱玉米"，如果玉米是 "$30/箱"，则总价是 2*30
+                    # 用户说 "1份小笼包"，如果小笼包是 "$20/25个"，则总价是 1*20 (这里的单位是 "25个")
+
+                    ordered_items.append({
+                        'name': current_product_lookup_key.capitalize(), # 显示时首字母大写
+                        'quantity': quantity,
+                        'unit_price': item_price, # 这是 original_unit_desc 的价格
+                        'unit_desc': original_unit_desc, # 例如 "只", "袋", "25个"
+                        'total': quantity * item_price
+                    })
+                    total_price += quantity * item_price
+                    found_items_for_billing = True
+
+        if found_items_for_billing:
+            response_parts = ["好的，这是您的订单详情："]
+            for item in ordered_items:
+                response_parts.append(f"- {item['name']} x {item['quantity']} ({item['unit_desc']}): ${item['unit_price']:.2f} x {item['quantity']} = ${item['total']:.2f}")
+            response_parts.append(f"总计：${total_price:.2f}")
+            final_response = "\\n".join(response_parts)
+            calculation_done = True
+        elif is_buy_request or is_price_request: # 尝试了算账但没找到具体物品
+            final_response = "抱歉，我需要更明确一些您想买什么。您可以说例如“我要1箱苹果和2袋香蕉”，或者问“苹果多少钱一箱？”"
+            calculation_done = True # 也算处理了，只是没成功
+
+    # 如果没有完成算账，或者不是算账请求，则走通用问答或Gemini
+    if not calculation_done:
+        # ... (原有的 knowledge_base 查找逻辑) ...
+        # (这个 knowledge_base 主要是关于果蔬营养、挑选、储存的，不是价格)
+        # 我们可以保留它，或者如果算账优先，则可以注释掉这部分，完全依赖Gemini处理非算账问题
+
+        # 决定是否调用Gemini
+        # 如果本地知识库（非价格）有答案，并且用户不是明确问价格/买东西，可以用本地答案
+        # 否则，如果Gemini可用，用Gemini
+        
+        # 简化：如果不是算账，直接走Gemini（如果可用）
+        if gemini_model:
+            try:
+                system_prompt = (
+                    "你是一位经验丰富的果蔬营养顾问和生鲜采购专家。请用自然、亲切且专业的口吻与用户交流，就像与一位朋友分享专业的果蔬知识一样。"
+                    "请避免使用过于刻板或程序化的语言，也不要主动提及自己是AI或模型。你的目标是提供准确、有用的信息，同时让对话感觉轻松愉快。"
+                    "专注于水果和蔬菜相关的话题。如果用户询问无关内容，请委婉地引导回果蔬主题。"
+                    "如果用户询问具体产品的价格或想下单，请告知你可以帮忙查询价格和计算总额，并引导用户说出想买的产品和数量。"
+                )
+                full_prompt = f"{system_prompt}\\n\\n这是我们目前的产品列表和价格（部分，供你参考）：\\n"
+                # 只给Gemini看一部分产品作为例子，避免prompt过长
+                limited_catalog_for_prompt = ""
+                count = 0
+                for name, details in PRODUCT_CATALOG.items():
+                    limited_catalog_for_prompt += f"- {name.capitalize()}: ${details['price']:.2f} / {details['original_unit_desc']}\\n"
+                    count += 1
+                    if count >= 10: # 最多显示10条给Gemini作为格式参考
+                        limited_catalog_for_prompt += "...还有更多产品...\\n"
+                        break
+                if not PRODUCT_CATALOG:
+                    limited_catalog_for_prompt = "（目前产品列表为空）\\n"
+
+                full_prompt += limited_catalog_for_prompt
+                full_prompt += f"\\n用户问：{user_input}"
+
+                gemini_response = gemini_model.generate_content(full_prompt)
+                final_response = gemini_response.text
+            except Exception as e:
+                print(f"调用 Gemini API 失败: {e}")
                 final_response = "抱歉，AI助手暂时遇到问题，请稍后再试。"
-    elif response_from_local_kb: # 如果 Gemini 未配置或初始化失败，但本地有答案
-        final_response = response_from_local_kb
-    # else: final_response 保持为初始的“抱歉...”
+        else: # Gemini不可用，且不是算账
+            final_response = "抱歉，我现在无法处理您的请求，也无法连接到我的知识库。请稍后再试。"
 
     return jsonify({'response': final_response})
 
