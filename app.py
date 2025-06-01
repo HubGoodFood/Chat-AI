@@ -46,6 +46,7 @@ def load_product_data(file_path="products.csv"): # 更改文件名为 products.c
     try:
         with open(file_path, mode='r', encoding='utf-8', newline='') as csvfile:
             reader = csv.DictReader(csvfile)
+            print(f"--- DEBUG: CSV Headers read by DictReader: {reader.fieldnames} ---") # 新增调试打印
             if not reader.fieldnames or not all(col in reader.fieldnames for col in ['ProductName', 'Specification', 'Price', 'Unit']):
                 print(f"错误: CSV文件 {file_path} 的列标题不正确。应包含 'ProductName', 'Specification', 'Price', 'Unit'")
                 return
