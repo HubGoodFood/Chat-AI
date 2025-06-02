@@ -35,12 +35,13 @@ def load_product_data(file_path="products.csv"):
     print(f"Attempting to load product data from {file_path}...") 
     global PRODUCT_CATALOG
     PRODUCT_CATALOG = {}
+    expected_headers = ['ProductName', 'Specification', 'Price', 'Unit', 'Category'] # 更新期望的列标题
     try:
         with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile: 
             reader = csv.DictReader(csvfile)
             print(f"--- DEBUG: CSV Headers read by DictReader: {reader.fieldnames} ---") 
-            if not reader.fieldnames or not all(col in reader.fieldnames for col in ['ProductName', 'Specification', 'Price', 'Unit']):
-                print(f"错误: CSV文件 {file_path} 的列标题不正确。应包含 'ProductName', 'Specification', 'Price', 'Unit'")
+            if not reader.fieldnames or not all(col in reader.fieldnames for col in expected_headers):
+                print(f"错误: CSV文件 {file_path} 的列标题不正确。应包含: {expected_headers}")
                 return
             
             for row_num, row in enumerate(reader, 1): 
@@ -49,9 +50,10 @@ def load_product_data(file_path="products.csv"):
                     specification = row['Specification'].strip()
                     price_str = row['Price'].strip()
                     unit = row['Unit'].strip()
+                    category = row['Category'].strip() # 读取Category列
 
-                    if not product_name or not price_str or not specification or not unit:
-                        print(f"警告: CSV文件第 {row_num+1} 行数据不完整，已跳过: {row}")
+                    if not product_name or not price_str or not specification or not unit or not category:
+                        print(f"警告: CSV文件第 {row_num+1} 行数据不完整（包含Category），已跳过: {row}")
                         continue
                     price = float(price_str)
                     unique_product_key = product_name
@@ -63,12 +65,13 @@ def load_product_data(file_path="products.csv"):
                         'specification': specification, 
                         'price': price, 
                         'unit': unit, 
+                        'category': category, # 存储Category信息
                         'original_display_name': unique_product_key 
                     }
                 except ValueError as ve:
                     print(f"警告: CSV文件第 {row_num+1} 行价格格式错误，已跳过: {row} - {ve}")
                 except KeyError as ke:
-                    print(f"警告: CSV文件第 {row_num+1} 行缺少必要的列，已跳过: {row} - {ke}")
+                    print(f"警告: CSV文件第 {row_num+1} 行缺少必要的列 (例如 {expected_headers})，已跳过: {row} - {ke}")
                 except Exception as e:
                     print(f"警告: 处理CSV文件第 {row_num+1} 行时发生未知错误，已跳过: {row} - {e}")
     except FileNotFoundError:
@@ -94,20 +97,23 @@ def chat():
     print("--- Chat route entered ---")
     user_input = request.json.get('message', '')
     user_input_for_processing = user_input.lower()
-    
-    print(f"--- New chat request --- User input: {user_input}")
-    print(f"DeepSeek client object: {llm_client}")
-    print(f"PRODUCT_CATALOG size: {len(PRODUCT_CATALOG)}")
-    print(f"Current last_identified_product_key_for_context: {last_identified_product_key_for_context}")
-
     calculation_done = False
     final_response = ""
 
-    # 意图识别关键词
+    # --- 意图识别关键词 ---
     buy_intent_keywords = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只"]
     price_query_keywords = ["多少钱", "价格是", "什么价", "价钱"]
-    what_do_you_sell_keywords = ["卖什么", "有什么产品", "商品列表", "菜单", "有哪些东西"]
+    what_do_you_sell_keywords = ["卖什么", "有什么产品", "商品列表", "菜单", "有哪些东西", "有什么卖"]
     recommend_keywords = ["推荐", "介绍点", "什么好吃", "什么值得买"]
+    # category_keywords 字典可以保留，用于辅助LLM的上下文筛选，或者如果硬编码的分类回复仍需它
+    category_keywords = {
+        "水果": ["果", "莓", "橙", "桃", "芒", "龙眼", "荔枝", "凤梨", "葡萄", "石榴", "山楂", "芭乐", "瓜"],
+        "蔬菜": ["菜", "瓜", "菇", "笋", "姜", "菠菜", "花苔", "萝卜", "南瓜", "玉米", "花生"],
+        "禽类": ["鸡", "鸭"],
+        "海鲜": ["鱼", "虾", "螺", "蛏", "蛤"],
+        "熟食面点": ["饺", "饼", "爪", "包子", "花卷", "生煎", "燕丸", "火烧", "馄炖", "粽", "面"],
+        "蛋类": ["蛋"]
+    }
 
     is_what_do_you_sell_request = any(keyword in user_input_for_processing for keyword in what_do_you_sell_keywords)
     is_recommend_request = any(keyword in user_input_for_processing for keyword in recommend_keywords)
@@ -151,32 +157,38 @@ def chat():
             print(f"处理数量追问时出错: {e}")
             # 出错则不处理，让后续逻辑或LLM处理
 
-    # 1. 处理“你们卖什么东西”的请求 (如果不是数量追问)
+    # --- 1. 处理“你们卖什么东西”的请求 ---
     if not calculation_done and is_what_do_you_sell_request:
         if PRODUCT_CATALOG:
-            response_parts = ["我们主要提供以下类别的生鲜和美食："]
-            categories = {}
+            response_parts = ["我们主要提供以下生鲜和美食："]
+            categories_from_catalog = {}
             for key, details in PRODUCT_CATALOG.items():
-                name = details['name']
-                cat = "其他"
-                if any(k in name for k in ["鸡", "鸭"]): cat = "禽类产品"
-                elif any(k in name for k in ["鱼", "虾", "螺", "蛏", "蛤"]): cat = "海鲜河鲜"
-                elif any(k in name for k in ["菜", "瓜", "菇", "笋", "姜", "菠菜", "花苔", "萝卜", "南瓜", "玉米", "花生"]): cat = "新鲜蔬菜"
-                elif any(k in name for k in ["果", "莓", "橙", "桃", "芒", "龙眼", "荔枝", "凤梨", "葡萄", "石榴", "山楂", "芭乐"]): cat = "时令水果"
-                elif any(k in name for k in ["饺", "饼", "爪", "包子", "花卷", "生煎", "燕丸", "火烧", "馄炖", "粽", "面"]): cat = "美味熟食/面点"
-                elif any(k in name for k in ["蛋"]): cat = "蛋类"
-                if cat not in categories: categories[cat] = []
-                if len(categories[cat]) < 3: categories[cat].append(details['original_display_name'])
-            for cat_name, items in categories.items():
-                response_parts.append(f"\n【{cat_name}】")
-                for item_display_name in items: response_parts.append(f"- {item_display_name}")
+                cat = details.get('category', '未分类') # 使用CSV中的Category
+                if cat not in categories_from_catalog:
+                    categories_from_catalog[cat] = []
+                if len(categories_from_catalog[cat]) < 4: # 每个类别列举稍多一些
+                    categories_from_catalog[cat].append(details['original_display_name'])
+            
+            if not categories_from_catalog:
+                response_parts.append("我们的产品种类丰富，例如：")
+                count = 0
+                for key, details in PRODUCT_CATALOG.items():
+                    response_parts.append(f"- {details['original_display_name']}")
+                    count += 1
+                    if count >= 5: break
+            else:
+                for cat_name, items in categories_from_catalog.items():
+                    response_parts.append(f"\n【{cat_name}】")
+                    for item_display_name in items:
+                        response_parts.append(f"- {item_display_name}")
             response_parts.append("\n您可以问我具体想了解哪一类，或者直接问某个产品的价格。")
             final_response = "\n".join(response_parts)
-        else: final_response = "抱歉，我们的产品列表暂时还没有加载好，您可以稍后再问我有什么产品。"
+        else: 
+            final_response = "抱歉，我们的产品列表暂时还没有加载好。"
         calculation_done = True
-        last_identified_product_key_for_context = None # 清除产品上下文，因为这是通用查询
+        last_identified_product_key_for_context = None
 
-    # 2. 处理推荐请求 (如果不是数量追问或卖什么)
+    # --- 2. 处理推荐请求 ---
     elif not calculation_done and is_recommend_request:
         if PRODUCT_CATALOG:
             response_parts = ["为您推荐几样我们这里不错的商品："]
@@ -192,9 +204,9 @@ def chat():
             final_response = "\n".join(response_parts)
         else: final_response = "我们的产品正在准备中，暂时无法为您推荐，非常抱歉！"
         calculation_done = True
-        last_identified_product_key_for_context = None # 清除产品上下文
+        last_identified_product_key_for_context = None
 
-    # 3. 尝试算账或查询价格 (如果以上都没处理)
+    # --- 3. 尝试算账或查询价格 ---
     if not calculation_done and PRODUCT_CATALOG:
         ordered_items = []
         total_price = 0.0
@@ -273,7 +285,7 @@ def chat():
                 processed_ordered_items.append({
                     'name': details['original_display_name'].capitalize(),
                     'quantity': qty,
-                    'unit_price': details['price'],
+                    'unit_price': details['price'], # 修正这里的逗号为正确的字典赋值
                     'unit_desc': details['specification'],
                     'total': item_total,
                     'catalog_key': ckey # 把key也加入，方便后续设置上下文
@@ -282,18 +294,15 @@ def chat():
             if len(processed_ordered_items) == 1 and is_price_action and not is_buy_action:
                 item = processed_ordered_items[0]
                 final_response = f"{item['name']} ({item['unit_desc']}) 的价格是 ${item['unit_price']:.2f}。"
-                last_identified_product_key_for_context = item['catalog_key'] # 更新上下文
+                last_identified_product_key_for_context = item['catalog_key']
                 calculation_done = True
             elif processed_ordered_items: # 购买意图或多个产品被提及的价格查询
                 response_parts = ["好的，这是您的订单详情："]
                 for item in processed_ordered_items:
                     response_parts.append(f"- {item['name']} x {item['quantity']} ({item['unit_desc']}): ${item['unit_price']:.2f} x {item['quantity']} = ${item['total']:.2f}")
-                if total_price > 0:
-                    response_parts.append(f"\n总计：${total_price:.2f}")
+                if total_price > 0: response_parts.append(f"\n总计：${total_price:.2f}")
                 final_response = "\n".join(response_parts)
-                # 如果是多项订单，更新上下文为最后处理的那个，或者不更新/清除？暂时更新为最后一个
-                if processed_ordered_items:
-                    last_identified_product_key_for_context = processed_ordered_items[-1]['catalog_key']
+                if processed_ordered_items: last_identified_product_key_for_context = processed_ordered_items[-1]['catalog_key']
                 calculation_done = True
         
         elif is_buy_action or is_price_action: # 有意图但没找到产品
@@ -306,39 +315,62 @@ def chat():
         if llm_client: # Changed from gemini_model to llm_client
             try:
                 system_prompt = (
-                    "你是一位经验丰富的果蔬生鲜客服。请用自然、亲切且专业的口吻与用户交流。"
-                    "避免刻板的AI语言。你的目标是提供准确、有用的信息，让对话感觉轻松愉快。"
-                    "专注于水果、蔬菜及相关农产品。如果用户询问无关内容，请委婉引导回主题。"
-                    "如果用户问你有什么产品，请友好地介绍我们有多种生鲜，并鼓励用户问具体类别或产品。"
-                    "如果用户询问具体产品的价格或想下单，但你无法从对话中解析出明确的产品和数量，请引导用户说出更具体的信息，例如“请问您想查询哪个产品的价格？”或“您想买多少呢？”。"
-                    "如果用户只是打招呼，比如“你好”，请友好回应。"
+                    "你是一位专业的生鲜产品客服。你的回答应该友好、自然且专业。"
+                    "主要任务是根据顾客的询问，结合我提供的产品列表（如果本次对话提供了的话）来回答问题。"
+                    "1. 当被问及我们有什么产品、特定类别的产品（如水果、时令水果、蔬菜等）或推荐时，你必须首先且主要参考我提供给你的产品列表上下文。请从该列表中选择相关的产品进行回答。"
+                    "2. 如果产品列表上下文中没有用户明确询问的产品，请礼貌地告知，例如：‘抱歉，您提到的XX我们目前可能没有，不过我们有这些相关的产品：[列举列表中的1-2个相关产品]’。不要虚构我们没有的产品。"
+                    "3. 如果用户只是打招呼（如‘你好’），请友好回应。"
+                    "4. 对于算账和精确价格查询，我会尽量自己处理。如果我处理不了，或者你需要补充信息，请基于我提供的产品列表（如果有）进行回答。"
+                    "5. 避免使用过于程序化或模板化的AI语言。"
+                    "6. 专注于水果、蔬菜及相关生鲜产品。如果用户询问完全无关的话题，请委婉地引导回我们的产品和服务。"
                 )
                 
-                messages = [
-                    {"role": "system", "content": system_prompt}
-                ]
-                if PRODUCT_CATALOG and not is_what_do_you_sell_request and not is_recommend_request:
-                    catalog_context = "\n\n作为参考，这是我们目前的部分产品列表和价格（价格单位以实际规格为准）：\n"
-                    count = 0
-                    for name_key, details in PRODUCT_CATALOG.items():
-                        display_name = details.get('original_display_name', name_key.capitalize())
-                        catalog_context += f"- {display_name}: ${details['price']:.2f} / {details['specification']}\n"
-                        count += 1
-                        if count >= 5:
-                            catalog_context += "...还有更多产品...\n"
+                messages = [{"role": "system", "content": system_prompt}]
+                
+                # 为LLM准备更相关的产品列表上下文
+                context_catalog_for_llm = ""
+                if PRODUCT_CATALOG:
+                    relevant_items = []
+                    user_asked_category_name = None
+                    # 尝试从用户输入中识别明确的类别名称 (与CSV中的Category列匹配)
+                    for cat_in_catalog in set(details.get('category', '未分类') for details in PRODUCT_CATALOG.values()): # 使用 .get 避免KeyError
+                        if cat_in_catalog.lower() in user_input_for_processing:
+                            user_asked_category_name = cat_in_catalog
                             break
-                    if not catalog_context.strip().endswith("...还有更多产品...\n") and count == 0:
-                         catalog_context = "（目前产品列表参考信息未能加载或为空）\n"
-                    messages.append({"role": "system", "content": "产品参考信息：" + catalog_context})
+                    
+                    if user_asked_category_name:
+                        print(f"--- LLM Context: User asked for category: {user_asked_category_name} ---")
+                        for key, details in PRODUCT_CATALOG.items():
+                            if details.get('category', '').lower() == user_asked_category_name.lower():
+                                relevant_items.append(details)
+                    
+                    if not relevant_items: # 如果没有特定分类匹配，或者用户没问分类，就取通用列表的前几个
+                        relevant_items = list(PRODUCT_CATALOG.values())
+
+                    if relevant_items:
+                        context_catalog_for_llm += "\n\n作为参考，这是我们目前的部分相关产品列表和价格（价格单位以实际规格为准）：\n"
+                        count = 0
+                        # random.shuffle(relevant_items) # 可选：随机打乱以提供多样性
+                        for details in relevant_items: # 使用筛选后或全部的 relevant_items
+                            display_name = details.get('original_display_name', details['name'].capitalize())
+                            category_info = f" (类别: {details.get('category', '未分类')})" # 添加类别信息
+                            context_catalog_for_llm += f"- {display_name}{category_info}: ${details['price']:.2f} / {details['specification']}\n"
+                            count += 1
+                            if count >= 7: # 限制传递给LLM的条目数量
+                                context_catalog_for_llm += "...还有更多相关产品...\n"
+                                break
+                        if count == 0: # 如果 relevant_items 为空或筛选后为空
+                            context_catalog_for_llm = "（目前相关的产品列表信息未能加载或为空）\n"
+                        messages.append({"role": "system", "content": "产品参考信息：" + context_catalog_for_llm})
                 
                 messages.append({"role": "user", "content": user_input})
                 
-                print(f"Messages to DeepSeek: {messages}") # 调试信息
+                print(f"Messages to DeepSeek: {messages}")
                 chat_completion = llm_client.chat.completions.create(
-                    model="deepseek-chat", # As per user info
+                    model="deepseek-chat", 
                     messages=messages,
-                    max_tokens=1024, # Adjust as needed
-                    temperature=0.7 # Adjust as needed
+                    max_tokens=1500, # 稍微增加max_tokens以允许更详细的列表
+                    temperature=0.5 # 可以尝试降低一点温度，使其更专注于事实
                 )
                 
                 print(f"DeepSeek response object: {chat_completion}") # 调试信息
@@ -352,9 +384,9 @@ def chat():
             except Exception as e:
                 print(f"调用 DeepSeek API 失败: {e}")
                 final_response = "抱歉，AI助手暂时遇到问题，请稍后再试。"
-        else: # llm_client is None
+        else: 
             final_response = "抱歉，我现在无法处理您的请求，AI服务未连接。请稍后再试。"
-        last_identified_product_key_for_context = None # 如果走了LLM，清除产品上下文
+        last_identified_product_key_for_context = None
 
     return jsonify({'response': final_response})
 
