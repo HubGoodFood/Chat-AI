@@ -37,6 +37,18 @@ USER_HISTORY = {} # 简单的用户历史记录 {user_id: [product_keys]}
 POPULAR_PRODUCTS = {} # 热门商品计数 {product_key: count}
 SEASONAL_PRODUCTS = [] # 当季/推荐商品列表
 
+# 类别关键词映射字典，用于辅助分类识别
+category_keywords = {
+    "水果": ["果", "莓", "橙", "桃", "芒", "龙眼", "荔枝", "凤梨", "葡萄", "石榴", "山楂", "芭乐", "瓜", 
+            "苹果", "梨", "柑橘", "香蕉", "菠萝", "李子", "樱桃", "蓝莓", "草莓", "猕猴桃"],
+    "蔬菜": ["菜", "瓜", "菇", "笋", "姜", "菠菜", "花苔", "萝卜", "南瓜", "玉米", "花生", 
+            "白菜", "茄子", "土豆", "黄瓜", "豆角", "番茄", "洋葱", "芹菜", "生菜"],
+    "禽类": ["鸡", "鸭", "鹅", "鸽子", "禽", "家禽", "散养", "走地"],
+    "海鲜": ["鱼", "虾", "螺", "蛏", "蛤", "海鲜", "水产", "河鲜", "贝", "蟹"],
+    "熟食面点": ["饺", "饼", "爪", "包子", "花卷", "生煎", "燕丸", "火烧", "馄炖", "粽", "面", "小吃", "点心"],
+    "蛋类": ["蛋", "鸡蛋", "鸭蛋", "皮蛋", "咸蛋"]
+}
+
 def load_product_data(file_path="products.csv"): 
     print(f"Attempting to load product data from {file_path}...") 
     global PRODUCT_CATALOG, PRODUCT_CATEGORIES, ALL_PRODUCT_KEYWORDS, SEASONAL_PRODUCTS
