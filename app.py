@@ -29,6 +29,8 @@ else:
 
 # 全局变量来存储产品数据
 PRODUCT_CATALOG = {}
+PRODUCT_CATEGORIES = {} # 用于存储每个类别的产品列表
+ALL_PRODUCT_KEYWORDS = [] # 用于存储所有产品关键词
 last_identified_product_key_for_context = None # 用于存储上一个明确处理的产品的key
 # 添加用户历史记录和热门商品跟踪
 USER_HISTORY = {} # 简单的用户历史记录 {user_id: [product_keys]}
@@ -37,8 +39,11 @@ SEASONAL_PRODUCTS = [] # 当季/推荐商品列表
 
 def load_product_data(file_path="products.csv"): 
     print(f"Attempting to load product data from {file_path}...") 
-    global PRODUCT_CATALOG
+    global PRODUCT_CATALOG, PRODUCT_CATEGORIES, ALL_PRODUCT_KEYWORDS, SEASONAL_PRODUCTS
     PRODUCT_CATALOG = {}
+    PRODUCT_CATEGORIES = {} 
+    ALL_PRODUCT_KEYWORDS = [] 
+    SEASONAL_PRODUCTS = []
     expected_headers = ['ProductName', 'Specification', 'Price', 'Unit', 'Category', 'Description', 'IsSeasonal'] # 更新期望的列标题
     try:
         with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile: 
@@ -87,6 +92,21 @@ def load_product_data(file_path="products.csv"):
                     if is_seasonal:
                         SEASONAL_PRODUCTS.append(unique_product_key.lower())
                         
+                    # 构建类别索引
+                    if category not in PRODUCT_CATEGORIES:
+                        PRODUCT_CATEGORIES[category] = []
+                    PRODUCT_CATEGORIES[category].append(unique_product_key.lower())
+                    
+                    # 提取产品关键词
+                    product_name = unique_product_key.lower()
+                    # 添加完整产品名
+                    if product_name not in ALL_PRODUCT_KEYWORDS:
+                        ALL_PRODUCT_KEYWORDS.append(product_name)
+                    # 添加单个词作为关键词
+                    for word in re.findall(r'[\w\u4e00-\u9fff]+', product_name):
+                        if len(word) > 1 and word not in ALL_PRODUCT_KEYWORDS:
+                            ALL_PRODUCT_KEYWORDS.append(word)
+                    
                 except ValueError as ve:
                     print(f"警告: CSV文件第 {row_num+1} 行价格格式错误，已跳过: {row} - {ve}")
                 except KeyError as ke:
@@ -104,6 +124,24 @@ def load_product_data(file_path="products.csv"):
         print(f"产品目录加载完成，共 {len(PRODUCT_CATALOG)} 条产品规格。")
         if SEASONAL_PRODUCTS:
             print(f"当季推荐产品: {len(SEASONAL_PRODUCTS)} 条")
+
+    # 构建类别索引和关键词列表
+    if PRODUCT_CATALOG:
+        for key, details in PRODUCT_CATALOG.items():
+            category = details.get('category', '未分类')
+            if category not in PRODUCT_CATEGORIES:
+                PRODUCT_CATEGORIES[category] = []
+            PRODUCT_CATEGORIES[category].append(key)
+            
+            # 提取产品关键词
+            product_name = details['name'].lower()
+            # 添加完整产品名
+            if product_name not in ALL_PRODUCT_KEYWORDS:
+                ALL_PRODUCT_KEYWORDS.append(product_name)
+            # 添加单个词作为关键词
+            for word in re.findall(r'[\w\u4e00-\u9fff]+', product_name):
+                if len(word) > 1 and word not in ALL_PRODUCT_KEYWORDS:
+                    ALL_PRODUCT_KEYWORDS.append(word)
 
 # 应用启动时加载产品数据 (确保在定义路由之前)
 load_product_data() # 默认加载 products.csv
@@ -156,6 +194,71 @@ def get_seasonal_products(limit=3, category=None):
             if key not in [p[0] for p in products]:
                 products.append((key, details))
     return products[:limit]
+
+# 添加一个新的函数用于模糊匹配产品
+def fuzzy_match_product(query_text, threshold=0.6):
+    """模糊匹配产品名称，返回可能的匹配及其相似度"""
+    query_lower = query_text.lower()
+    direct_matches = []
+    partial_matches = []
+    
+    # 1. 尝试直接匹配产品名或catalog_key
+    for key, details in PRODUCT_CATALOG.items():
+        if query_lower in key or query_lower in details['name'].lower():
+            direct_matches.append((key, 1.0))  # 完全匹配，相似度为1
+        
+    if direct_matches:
+        return direct_matches
+    
+    # 2. 尝试关键词部分匹配
+    for key, details in PRODUCT_CATALOG.items():
+        product_name = details['name'].lower()
+        
+        # 计算关键词覆盖率
+        query_words = set(re.findall(r'[\w\u4e00-\u9fff]+', query_lower))
+        product_words = set(re.findall(r'[\w\u4e00-\u9fff]+', product_name))
+        
+        if not query_words:
+            continue
+            
+        # 计算有多少查询词出现在产品名中
+        matched_words = query_words.intersection(product_words)
+        if matched_words:
+            similarity = len(matched_words) / len(query_words)
+            if similarity >= threshold:
+                partial_matches.append((key, similarity))
+    
+    # 按相似度排序
+    partial_matches.sort(key=lambda x: x[1], reverse=True)
+    return partial_matches
+
+# 找到与查询相关的产品类别
+def find_related_category(query_text):
+    """基于查询文本找到最相关的产品类别"""
+    query_lower = query_text.lower()
+    
+    # 1. 直接在查询中查找类别名称
+    for category in PRODUCT_CATEGORIES.keys():
+        if category.lower() in query_lower:
+            return category
+    
+    # 2. 检查类别关键词
+    category_scores = {}
+    query_words = set(re.findall(r'[\w\u4e00-\u9fff]+', query_lower))
+    
+    for category, keywords_list in category_keywords.items():
+        score = 0
+        for keyword in keywords_list:
+            if keyword in query_lower:
+                score += 1
+        if score > 0:
+            category_scores[category] = score
+    
+    if category_scores:
+        # 返回得分最高的类别
+        return max(category_scores.items(), key=lambda x: x[1])[0]
+    
+    return None
 
 @app.route('/')
 def index():
@@ -337,72 +440,66 @@ def chat():
     if not calculation_done and PRODUCT_CATALOG:
         ordered_items = []
         total_price = 0.0
-        identified_products_for_calculation = [] # 用于存储本次明确识别并用于计算的产品
+        identified_products_for_calculation = []
 
         is_buy_action = any(keyword in user_input_for_processing for keyword in buy_intent_keywords)
         is_price_action = any(keyword in user_input_for_processing for keyword in price_query_keywords)
         
-        for catalog_key, product_details in PRODUCT_CATALOG.items():
-            product_name_for_match = product_details['name'].lower()
-            # 优先匹配 catalog_key (更精确，含规格)
-            # 然后匹配 product_name_for_match (基础名)
-            # 再尝试部分匹配 (用户说简称)
-            matched_this_item = False
-            if catalog_key in user_input_for_processing:
-                matched_this_item = True
-            elif product_name_for_match in user_input_for_processing:
-                matched_this_item = True
-            else:
-                user_terms = [term for term in re.split(r'\s+|(?<=[\\u4e00-\\u9fa5])(?=[^\\u4e00-\\u9fa5])|(?<=[^\\u4e00-\\u9fa5])(?=[\\u4e00-\\u9fa5])', user_input) if len(term) > 1]
-                for term in user_terms:
-                    if term.lower() in product_name_for_match:
-                        matched_this_item = True
-                        break
+        # 使用模糊匹配识别产品
+        possible_matches = fuzzy_match_product(user_input_for_processing)
+        
+        for catalog_key, similarity in possible_matches:
+            product_details = PRODUCT_CATALOG.get(catalog_key)
+            if not product_details:
+                continue
+                
+            # 确定数量
+            quantity = 1
+            try_names = [product_details['original_display_name'], product_details['name']]
+            best_match_pos = -1
+            search_term_for_qty = catalog_key # 默认用最精确的key来定位数量
             
-            if matched_this_item:
-                quantity = 1
-                try_names = [product_details['original_display_name'], product_details['name']]
-                best_match_pos = -1
-                search_term_for_qty = catalog_key # 默认用最精确的key来定位数量
-                for name_variant in try_names:
-                    pos = user_input_for_processing.find(name_variant.lower())
-                    if pos != -1:
-                        best_match_pos = pos
-                        search_term_for_qty = name_variant.lower()
-                        break
-                if best_match_pos == -1: # 如果上面没匹配到，尝试用 catalog_key (可能含括号)
-                    pos = user_input_for_processing.find(catalog_key)
-                    if pos != -1:
-                        best_match_pos = pos
-                        search_term_for_qty = catalog_key
-                
-                # 检查用户是否明确指定了数量，或者是纯价格/重量查询
-                weight_query_keywords = ["多重", "多少重", "什么重量", "称重", "多大"]
-                price_only_query = is_price_action and not is_buy_action
-                weight_only_query = any(keyword in user_input_for_processing for keyword in weight_query_keywords)
-                
-                # 如果是纯价格或重量查询，不要处理数量
-                if not price_only_query and not weight_only_query and best_match_pos != -1:
-                    text_before_product = user_input_for_processing[:best_match_pos]
-                    qty_search = re.search(r'([\\d一二三四五六七八九十百千万俩两]+)\\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\\s*$', text_before_product.strip())
-                    if qty_search:
-                        num_str = qty_search.group(1)
-                        try: quantity = int(num_str)
-                        except ValueError: 
-                            num_map = {'一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10} # 简单中文数字
-                            if num_str in num_map: quantity = num_map[num_str]
-                            else: quantity = 1
-                
-                identified_products_for_calculation.append({
-                    'catalog_key': catalog_key, # 存储catalog_key用于上下文
-                    'details': product_details,
-                    'quantity': quantity,
-                    'is_price_query': price_only_query,
-                    'is_weight_query': weight_only_query
-                })
-                
-                # 增加该产品的热度
-                update_product_popularity(catalog_key)
+            for name_variant in try_names:
+                pos = user_input_for_processing.find(name_variant.lower())
+                if pos != -1:
+                    best_match_pos = pos
+                    search_term_for_qty = name_variant.lower()
+                    break
+                    
+            if best_match_pos == -1: # 如果上面没匹配到，尝试用 catalog_key
+                pos = user_input_for_processing.find(catalog_key)
+                if pos != -1:
+                    best_match_pos = pos
+                    search_term_for_qty = catalog_key
+            
+            # 检查用户是否明确指定了数量，或者是纯价格/重量查询
+            weight_query_keywords = ["多重", "多少重", "什么重量", "称重", "多大"]
+            price_only_query = is_price_action and not is_buy_action
+            weight_only_query = any(keyword in user_input_for_processing for keyword in weight_query_keywords)
+            
+            # 如果是纯价格或重量查询，不要处理数量
+            if not price_only_query and not weight_only_query and best_match_pos != -1:
+                text_before_product = user_input_for_processing[:best_match_pos]
+                qty_search = re.search(r'([\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*$', text_before_product.strip())
+                if qty_search:
+                    num_str = qty_search.group(1)
+                    try: quantity = int(num_str)
+                    except ValueError: 
+                        num_map = {'一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10} # 简单中文数字
+                        if num_str in num_map: quantity = num_map[num_str]
+                        else: quantity = 1
+            
+            identified_products_for_calculation.append({
+                'catalog_key': catalog_key, # 存储catalog_key用于上下文
+                'details': product_details,
+                'quantity': quantity,
+                'is_price_query': price_only_query,
+                'is_weight_query': weight_only_query,
+                'similarity': similarity
+            })
+            
+            # 增加该产品的热度
+            update_product_popularity(catalog_key)
 
         if identified_products_for_calculation:
             # 去重和合并数量 (基于catalog_key)
@@ -517,10 +614,70 @@ def chat():
                 final_response = "\n".join(response_parts)
                 calculation_done = True
         
-        elif is_buy_action or is_price_action: # 有意图但没找到产品
-            final_response = "抱歉，我没有在菜单中找到您提到的产品。您可以看看我们有什么产品，或者换个方式问我哦。"
-            calculation_done = True
-            last_identified_product_key_for_context = None # 清除上下文
+        elif is_buy_action or is_price_action or is_what_do_you_sell_request:
+            # 尝试提取查询的产品关键词
+            query_product = None
+            best_match = 0
+            
+            # 提取用户查询中可能的产品名称
+            user_words = set(re.findall(r'[\w\u4e00-\u9fff]+', user_input_for_processing))
+            
+            for word in user_words:
+                if len(word) < 2:
+                    continue
+                for key, details in PRODUCT_CATALOG.items():
+                    product_name = details['name'].lower()
+                    if word in product_name and len(word) > best_match:
+                        query_product = word
+                        best_match = len(word)
+            
+            # 找到相关类别
+            related_category = find_related_category(user_input)
+            
+            # 获取相关推荐
+            recommendation_items = []
+            
+            # 1. 如果有查询产品，尝试找同类产品
+            if query_product:
+                for key, details in PRODUCT_CATALOG.items():
+                    # 检查产品名称是否包含查询关键词的部分
+                    product_name = details['name'].lower()
+                    if query_product in product_name:
+                        recommendation_items.append((key, details, f"与'{query_product}'相关"))
+                
+                if len(recommendation_items) > 0:
+                    final_response = f"抱歉，我们目前没有找到您查询的完整产品。您可能对以下相关商品感兴趣：\n\n"
+                    for key, details, tag in recommendation_items[:3]:
+                        seasonal_tag = ""
+                        if key in SEASONAL_PRODUCTS:
+                            seasonal_tag = "【当季新鲜】"
+                        description = details.get('description', '')
+                        desc_text = f" - {description}" if description else ""
+                        final_response += f"- {seasonal_tag}{details['original_display_name']}: ${details['price']:.2f}/{details['specification']}{desc_text}\n"
+                    
+                    last_identified_product_key_for_context = None
+                    calculation_done = True
+            
+            # 2. 如果有相关类别，推荐该类别的产品
+            elif related_category and related_category in PRODUCT_CATEGORIES:
+                category_products = get_products_by_category(related_category, 3)
+                final_response = f"抱歉，我们目前没有您查询的产品。不过，我们有以下{related_category}类商品：\n\n"
+                for key, details in category_products:
+                    seasonal_tag = ""
+                    if key in SEASONAL_PRODUCTS:
+                        seasonal_tag = "【当季新鲜】"
+                    description = details.get('description', '')
+                    desc_text = f" - {description}" if description else ""
+                    final_response += f"- {seasonal_tag}{details['original_display_name']}: ${details['price']:.2f}/{details['specification']}{desc_text}\n"
+                
+                last_identified_product_key_for_context = None
+                calculation_done = True
+            
+            # 3. 否则，使用默认回复
+            else:
+                final_response = "抱歉，我没有在菜单中找到您提到的产品。您可以询问我们有什么水果、蔬菜或其他生鲜产品。"
+                calculation_done = True
+                last_identified_product_key_for_context = None
 
     # 如果以上逻辑都未处理，则交由LLM处理
     if not calculation_done:
