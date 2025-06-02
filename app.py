@@ -250,10 +250,12 @@ def find_related_category(query_text):
     # 检查关键词是否在查询中
     for keyword in fruit_keywords:
         if keyword in query_lower:
+            print(f"--- 通过水果关键词识别到产品类别: 水果 (关键词: {keyword}) ---")
             return "水果"
             
     for keyword in vegetable_keywords:
         if keyword in query_lower:
+            print(f"--- 通过蔬菜关键词识别到产品类别: 蔬菜 (关键词: {keyword}) ---")
             return "蔬菜"
     
     # 1. 直接在查询中查找类别名称
@@ -391,11 +393,14 @@ def chat():
     elif not calculation_done and is_recommend_request:
         if PRODUCT_CATALOG:
             # 识别用户是否询问特定类别的推荐
-            target_category = None
-            for cat_name in set(details.get('category', '') for details in PRODUCT_CATALOG.values()):
-                if cat_name.lower() in user_input_for_processing:
-                    target_category = cat_name
-                    break
+            target_category = find_related_category(user_input_for_processing)
+            if not target_category:
+                for cat_name in set(details.get('category', '') for details in PRODUCT_CATALOG.values()):
+                    if cat_name.lower() in user_input_for_processing:
+                        target_category = cat_name
+                        break
+                        
+            print(f"--- 推荐请求的目标类别: {target_category} ---")
                     
             # 更智能的推荐算法
             response_parts = []
@@ -693,6 +698,7 @@ def chat():
                     
                     target_categories = fruit_categories if related_category == "水果" else veg_categories
                     
+                    print(f"尝试从相似类别中查找产品: {target_categories}")
                     # 尝试从相似类别中获取产品
                     for cat in target_categories:
                         for key, details in PRODUCT_CATALOG.items():
@@ -771,19 +777,73 @@ def chat():
                 if PRODUCT_CATALOG:
                     relevant_items = []
                     user_asked_category_name = None
-                    # 尝试从用户输入中识别明确的类别名称 (与CSV中的Category列匹配)
-                    for cat_in_catalog in set(details.get('category', '未分类') for details in PRODUCT_CATALOG.values()): # 使用 .get 避免KeyError
-                        if cat_in_catalog.lower() in user_input_for_processing:
-                            user_asked_category_name = cat_in_catalog
-                            break
+                    
+                    # 尝试从用户输入中识别类别(优先使用find_related_category)
+                    related_category = find_related_category(user_input)
+                    if related_category:
+                        user_asked_category_name = related_category
+                        print(f"--- LLM Context: User query related to category from find_related_category: {user_asked_category_name} ---")
+                    
+                    # 如果上面没找到，尝试从用户输入中识别明确的类别名称 (与CSV中的Category列匹配)
+                    if not user_asked_category_name:
+                        for cat_in_catalog in set(details.get('category', '未分类') for details in PRODUCT_CATALOG.values()):
+                            if cat_in_catalog.lower() in user_input_for_processing:
+                                user_asked_category_name = cat_in_catalog
+                                break
                     
                     if user_asked_category_name:
                         print(f"--- LLM Context: User asked for category: {user_asked_category_name} ---")
+                        # 尝试添加精确类别匹配
                         for key, details in PRODUCT_CATALOG.items():
                             if details.get('category', '').lower() == user_asked_category_name.lower():
                                 relevant_items.append(details)
+                        
+                        # 如果识别为"水果"或"蔬菜"但找不到精确匹配，尝试更广泛的匹配
+                        if not relevant_items and user_asked_category_name in ["水果", "蔬菜"]:
+                            broader_categories = []
+                            if user_asked_category_name == "水果":
+                                broader_categories = ["水果", "新鲜水果", "时令水果", "进口水果"]
+                            else:
+                                broader_categories = ["蔬菜", "新鲜蔬菜", "时令蔬菜", "绿叶蔬菜"]
+                            
+                            for cat in broader_categories:
+                                for key, details in PRODUCT_CATALOG.items():
+                                    if details.get('category', '').lower() == cat.lower():
+                                        relevant_items.append(details)
+                                        if len(relevant_items) >= 5:  # 限制数量
+                                            break
+                                if relevant_items:
+                                    break
+                            
+                            # 如果仍然找不到相关类别产品，打印调试信息
+                            if not relevant_items:
+                                print(f"警告：未能找到类别'{user_asked_category_name}'的相关产品")
                     
-                    if not relevant_items: # 如果没有特定分类匹配，或者用户没问分类，就取通用列表的前几个
+                    # 如果仍然没有找到相关项目，但用户查询中包含"水果"、"蔬菜"等泛类别关键词
+                    if not relevant_items and any(keyword in user_input_for_processing for keyword in ["水果", "蔬菜", "肉", "禽", "海鲜"]):
+                        category_hints = {
+                            "水果": ["水果", "新鲜水果", "时令水果", "进口水果"],
+                            "蔬菜": ["蔬菜", "新鲜蔬菜", "时令蔬菜", "绿叶蔬菜"],
+                            "肉": ["肉类", "新鲜肉类"],
+                            "禽": ["禽类", "禽类产品"],
+                            "海鲜": ["海鲜", "海鲜河鲜", "水产"]
+                        }
+                        
+                        for keyword, categories in category_hints.items():
+                            if keyword in user_input_for_processing:
+                                for cat in categories:
+                                    for key, details in PRODUCT_CATALOG.items():
+                                        if details.get('category', '').lower() == cat.lower():
+                                            relevant_items.append(details)
+                                            if len(relevant_items) >= 5:  # 限制数量
+                                                break
+                                    if len(relevant_items) >= 5:
+                                        break
+                                if relevant_items:
+                                    break
+
+                    if not relevant_items: # 如果没有特定分类匹配
+                        print(f"--- LLM Context: No category match, using general products ---")
                         # 优先选择当季和热门产品
                         seasonal_items = []
                         for key in SEASONAL_PRODUCTS:
