@@ -376,7 +376,13 @@ def chat():
                         best_match_pos = pos
                         search_term_for_qty = catalog_key
                 
-                if best_match_pos != -1:
+                # 检查用户是否明确指定了数量，或者是纯价格/重量查询
+                weight_query_keywords = ["多重", "多少重", "什么重量", "称重", "多大"]
+                price_only_query = is_price_action and not is_buy_action
+                weight_only_query = any(keyword in user_input_for_processing for keyword in weight_query_keywords)
+                
+                # 如果是纯价格或重量查询，不要处理数量
+                if not price_only_query and not weight_only_query and best_match_pos != -1:
                     text_before_product = user_input_for_processing[:best_match_pos]
                     qty_search = re.search(r'([\\d一二三四五六七八九十百千万俩两]+)\\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\\s*$', text_before_product.strip())
                     if qty_search:
@@ -390,7 +396,9 @@ def chat():
                 identified_products_for_calculation.append({
                     'catalog_key': catalog_key, # 存储catalog_key用于上下文
                     'details': product_details,
-                    'quantity': quantity
+                    'quantity': quantity,
+                    'is_price_query': price_only_query,
+                    'is_weight_query': weight_only_query
                 })
                 
                 # 增加该产品的热度
@@ -403,6 +411,9 @@ def chat():
                 ckey = item_data['catalog_key']
                 if ckey in merged_items_dict:
                     merged_items_dict[ckey]['quantity'] += item_data['quantity']
+                    # 合并查询类型标记
+                    merged_items_dict[ckey]['is_price_query'] = merged_items_dict[ckey]['is_price_query'] or item_data['is_price_query']
+                    merged_items_dict[ckey]['is_weight_query'] = merged_items_dict[ckey]['is_weight_query'] or item_data['is_weight_query']
                 else:
                     merged_items_dict[ckey] = item_data
             
@@ -418,24 +429,69 @@ def chat():
                     'unit_price': details['price'], 
                     'unit_desc': details['specification'],
                     'total': item_total,
-                    'catalog_key': ckey # 把key也加入，方便后续设置上下文
+                    'catalog_key': ckey, # 把key也加入，方便后续设置上下文
+                    'is_price_query': item_data.get('is_price_query', False),
+                    'is_weight_query': item_data.get('is_weight_query', False)
                 })
-
-            if len(processed_ordered_items) == 1 and is_price_action and not is_buy_action:
+            
+            # 判断是单个产品的价格/重量查询
+            single_item_query = len(processed_ordered_items) == 1
+            if single_item_query:
                 item = processed_ordered_items[0]
-                product_details = PRODUCT_CATALOG.get(item['catalog_key'])
-                description = ""
-                if product_details and product_details.get('description'):
-                    description = f"\n\n{product_details['description']}"
                 
-                seasonal_tag = ""
-                if item['catalog_key'] in SEASONAL_PRODUCTS:
-                    seasonal_tag = "【当季新鲜】"
-                
-                final_response = f"{seasonal_tag}{item['name']} ({item['unit_desc']}) 的价格是 ${item['unit_price']:.2f}。{description}"
-                last_identified_product_key_for_context = item['catalog_key']
-                calculation_done = True
-            elif processed_ordered_items: # 购买意图或多个产品被提及的价格查询
+                # 重量查询
+                if item['is_weight_query']:
+                    product_details = PRODUCT_CATALOG.get(item['catalog_key'])
+                    response_parts = []
+                    
+                    # 添加产品信息
+                    seasonal_tag = ""
+                    if item['catalog_key'] in SEASONAL_PRODUCTS:
+                        seasonal_tag = "【当季新鲜】"
+                    
+                    response_parts.append(f"{seasonal_tag}{item['name']} ({item['unit_desc']}) 的规格重量如您所见。")
+                    
+                    # 添加详细描述
+                    if product_details and product_details.get('description'):
+                        response_parts.append(f"{product_details['description']}")
+                    
+                    response_parts.append(f"单价是 ${item['unit_price']:.2f}/{item['unit_desc']}。")
+                    
+                    final_response = "\n".join(response_parts)
+                    last_identified_product_key_for_context = item['catalog_key']
+                    calculation_done = True
+                    
+                # 价格查询
+                elif item['is_price_query'] or (is_price_action and not is_buy_action):
+                    product_details = PRODUCT_CATALOG.get(item['catalog_key'])
+                    description = ""
+                    if product_details and product_details.get('description'):
+                        description = f"\n\n{product_details['description']}"
+                    
+                    seasonal_tag = ""
+                    if item['catalog_key'] in SEASONAL_PRODUCTS:
+                        seasonal_tag = "【当季新鲜】"
+                    
+                    final_response = f"{seasonal_tag}{item['name']} ({item['unit_desc']}) 的价格是 ${item['unit_price']:.2f}。{description}"
+                    last_identified_product_key_for_context = item['catalog_key']
+                    calculation_done = True
+                    
+                # 购买意图
+                elif is_buy_action:
+                    response_parts = ["好的，这是您的订单详情："]
+                    for item in processed_ordered_items:
+                        product_details = PRODUCT_CATALOG.get(item['catalog_key'])
+                        seasonal_tag = ""
+                        if item['catalog_key'] in SEASONAL_PRODUCTS:
+                            seasonal_tag = "【当季新鲜】"
+                        
+                        response_parts.append(f"- {seasonal_tag}{item['name']} x {item['quantity']} ({item['unit_desc']}): ${item['unit_price']:.2f} x {item['quantity']} = ${item['total']:.2f}")
+                    if total_price > 0: response_parts.append(f"\n总计：${total_price:.2f}")
+                    final_response = "\n".join(response_parts)
+                    if processed_ordered_items: last_identified_product_key_for_context = processed_ordered_items[-1]['catalog_key']
+                    calculation_done = True
+            # 多个商品
+            elif processed_ordered_items and is_buy_action: 
                 response_parts = ["好的，这是您的订单详情："]
                 for item in processed_ordered_items:
                     product_details = PRODUCT_CATALOG.get(item['catalog_key'])
@@ -447,6 +503,18 @@ def chat():
                 if total_price > 0: response_parts.append(f"\n总计：${total_price:.2f}")
                 final_response = "\n".join(response_parts)
                 if processed_ordered_items: last_identified_product_key_for_context = processed_ordered_items[-1]['catalog_key']
+                calculation_done = True
+            # 价格比较或其他情况
+            else:
+                response_parts = ["您询问的产品信息如下："]
+                for item in processed_ordered_items:
+                    product_details = PRODUCT_CATALOG.get(item['catalog_key'])
+                    seasonal_tag = ""
+                    if item['catalog_key'] in SEASONAL_PRODUCTS:
+                        seasonal_tag = "【当季新鲜】"
+                    
+                    response_parts.append(f"- {seasonal_tag}{item['name']}: ${item['unit_price']:.2f}/{item['unit_desc']}")
+                final_response = "\n".join(response_parts)
                 calculation_done = True
         
         elif is_buy_action or is_price_action: # 有意图但没找到产品
