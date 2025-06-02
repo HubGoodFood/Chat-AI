@@ -1,57 +1,48 @@
 from flask import Flask, request, jsonify, render_template
 import os
-import google.generativeai as genai
+from openai import OpenAI # ADDED for DeepSeek (OpenAI compatible)
 import re
-import csv # 导入csv模块
+import csv
+import random # Ensure random is imported for recommendations
 
 app = Flask(__name__)
 print(" Flask app script is starting up... ")
 print(" Flask app object created. ")
 
-# 从环境变量中获取 API 密钥
-GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY')
-print(f"--- STARTUP CHECK: GOOGLE_API_KEY from env is {'SET' if GEMINI_API_KEY else 'NOT SET'} ---")
-if not GEMINI_API_KEY:
-    print("警告：未找到 GOOGLE_API_KEY 环境变量。Gemini API 将无法使用。")
-else:
-    print(f"--- API Key found. Attempting genai.configure() ---") # 新增
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        print("--- genai.configure() SUCCEEDED ---") # 新增
-    except Exception as e:
-        print(f"配置 Gemini API 失败: {e}")
-        GEMINI_API_KEY = None # 配置失败则禁用
+# --- ADDED DeepSeek API Key and Client Initialization ---
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1" # As per user info
 
-# 初始化 Gemini 模型 (如果API密钥有效)
-gemini_model = None
-print(f"--- Before model initialization: GEMINI_API_KEY is {'SET' if GEMINI_API_KEY else 'NOT SET (possibly due to configure failure or never set)'} ---") # 新增
-if GEMINI_API_KEY:
-    print(f"--- Attempting genai.GenerativeModel('gemini-1.5-flash') ---") # 更改模型名称
-    try:
-        gemini_model = genai.GenerativeModel('gemini-1.5-flash') # 更改为 'gemini-1.5-flash'
-        print(f"--- genai.GenerativeModel() SUCCEEDED. gemini_model is now: {gemini_model} ---") # 新增
-    except Exception as e:
-        print(f"初始化 Gemini 模型失败: {e}")
-        gemini_model = None
+llm_client = None
+if not DEEPSEEK_API_KEY:
+    print("警告：未找到 DEEPSEEK_API_KEY 环境变量。DeepSeek API 将无法使用。")
 else:
-    print("--- Skipping genai.GenerativeModel() because GEMINI_API_KEY is NOT SET ---") # 新增
+    try:
+        llm_client = OpenAI(
+            api_key=DEEPSEEK_API_KEY,
+            base_url=DEEPSEEK_BASE_URL
+        )
+        print(f"--- OpenAI client configured for DeepSeek API at {DEEPSEEK_BASE_URL} ---")
+    except Exception as e:
+        print(f"配置 DeepSeek API 客户端失败: {e}")
+        llm_client = None
 
 # 全局变量来存储产品数据
 PRODUCT_CATALOG = {}
 
-def load_product_data(file_path="products.csv"): # 更改文件名为 products.csv
-    print(f"Attempting to load product data from {file_path}...") # 更新打印信息
+def load_product_data(file_path="products.csv"): 
+    print(f"Attempting to load product data from {file_path}...") 
     global PRODUCT_CATALOG
     PRODUCT_CATALOG = {}
     try:
-        with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile: # 使用 utf-8-sig 编码
+        with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile: 
             reader = csv.DictReader(csvfile)
-            print(f"--- DEBUG: CSV Headers read by DictReader: {reader.fieldnames} ---") # 新增调试打印
+            print(f"--- DEBUG: CSV Headers read by DictReader: {reader.fieldnames} ---") 
             if not reader.fieldnames or not all(col in reader.fieldnames for col in ['ProductName', 'Specification', 'Price', 'Unit']):
                 print(f"错误: CSV文件 {file_path} 的列标题不正确。应包含 'ProductName', 'Specification', 'Price', 'Unit'")
                 return
             
-            for row_num, row in enumerate(reader, 1): # 从1开始计数行号，方便调试
+            for row_num, row in enumerate(reader, 1): 
                 try:
                     product_name = row['ProductName'].strip()
                     specification = row['Specification'].strip()
@@ -61,52 +52,24 @@ def load_product_data(file_path="products.csv"): # 更改文件名为 products.c
                     if not product_name or not price_str or not specification or not unit:
                         print(f"警告: CSV文件第 {row_num+1} 行数据不完整，已跳过: {row}")
                         continue
-
                     price = float(price_str)
-                    
-                    # 创建一个唯一的键，例如 "产品名称 (规格)"
-                    # 如果规格已经是产品名的一部分（例如 "产品名称 半箱"），则直接用产品名
-                    # 这里我们假设 ProductName 列已经是唯一的，或者 ProductName + Specification 是唯一的
-                    # 为了简单起见，我们先用 ProductName + Specification 作为组合键的基础
-                    # 如果 Specification 为空或与 Unit 相同，可以只用 ProductName
-                    
-                    # 让key更具描述性，例如 "新鲜农场玉米 (箱)" 或 "新鲜农场玉米 (半箱)"
-                    # 我们将使用 ProductName 和 Specification 来构建一个唯一的 key
-                    # 如果 Specification 已经能很好地区分，比如 “箱” vs “半箱”，那么可以这样组合
-                    # 如果 Specification 只是 “只”，而 ProductName 已经是 “萨松母鸡”，那么key可以是 “萨松母鸡 (只)"
-                    # 或者，如果希望用户直接说 “萨松母鸡”，就能匹配到，那么key应该是小写的 “萨松母鸡”
-                    # 考虑到用户可能会说 “玉米 箱” 或 “玉米 半箱”，我们将产品名和规格组合起来作为key
-                    
-                    # 修正：使用产品名和规格来构建唯一的key，并转为小写
-                    # 例如，如果CSV中有两行：
-                    # 新鲜农场玉米,箱,30,箱
-                    # 新鲜农场玉米,半箱,18,半箱
-                    # 对应的key会是 "新鲜农场玉米 (箱)" 和 "新鲜农场玉米 (半箱)"
-                    # 这样用户说“我要一箱玉米”或“我要半箱玉米”时，我们可以尝试匹配
-                    
-                    # 为了让用户输入匹配更容易，我们将产品名和规格组合起来
-                    # 如果规格已经是产品名的一部分（例如，产品名是“玉米 半箱”），则直接用产品名
-                    # 否则，如果规格有意义，则组合
                     unique_product_key = product_name
                     if specification and specification.lower() != unit.lower() and specification not in product_name:
                         unique_product_key = f"{product_name} ({specification})"
                     
                     PRODUCT_CATALOG[unique_product_key.lower()] = {
-                        'name': product_name, # 原始产品名，用于显示
-                        'specification': specification, # 规格
+                        'name': product_name, 
+                        'specification': specification, 
                         'price': price, 
-                        'unit': unit, # 价格对应的单位
-                        'original_display_name': unique_product_key # 用于显示给用户的完整名称
+                        'unit': unit, 
+                        'original_display_name': unique_product_key 
                     }
-                    # print(f"Loaded: {unique_product_key.lower()} -> Price: {price}, Unit: {unit}, Spec: {specification}")
-
                 except ValueError as ve:
                     print(f"警告: CSV文件第 {row_num+1} 行价格格式错误，已跳过: {row} - {ve}")
                 except KeyError as ke:
                     print(f"警告: CSV文件第 {row_num+1} 行缺少必要的列，已跳过: {row} - {ke}")
                 except Exception as e:
                     print(f"警告: 处理CSV文件第 {row_num+1} 行时发生未知错误，已跳过: {row} - {e}")
-
     except FileNotFoundError:
         print(f"错误: 产品文件 {file_path} 未找到。请确保它在应用根目录。")
     except Exception as e:
@@ -131,16 +94,14 @@ def chat():
     user_input_for_processing = user_input.lower()
     
     print(f"--- New chat request --- User input: {user_input}")
-    print(f"Gemini model object: {gemini_model}")
-    print(f"PRODUCT_CATALOG size: {len(PRODUCT_CATALOG)}") # 调试：打印产品目录大小
-    # if PRODUCT_CATALOG: # 调试：打印一些产品看看是否加载正确
-    #     print(f"Sample product from catalog: {list(PRODUCT_CATALOG.items())[0] if PRODUCT_CATALOG else 'Catalog is empty'}")
+    print(f"DeepSeek client object: {llm_client}") # Updated print
+    print(f"PRODUCT_CATALOG size: {len(PRODUCT_CATALOG)}")
 
     calculation_done = False
     final_response = ""
 
     # 意图识别关键词
-    buy_intent_keywords = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只"] # 明确的购买意图
+    buy_intent_keywords = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只"]
     price_query_keywords = ["多少钱", "价格是", "什么价", "价钱"]
     what_do_you_sell_keywords = ["卖什么", "有什么产品", "商品列表", "菜单", "有哪些东西"]
     recommend_keywords = ["推荐", "介绍点", "什么好吃", "什么值得买"]
@@ -175,7 +136,6 @@ def chat():
     # 2. 处理推荐请求 (如果上面没处理)
     elif is_recommend_request: # 使用 elif 确保意图不重叠
         if PRODUCT_CATALOG:
-            import random
             response_parts = ["为您推荐几样我们这里不错的商品："]
             num_to_recommend = min(len(PRODUCT_CATALOG), 3)
             if num_to_recommend > 0:
@@ -194,32 +154,22 @@ def chat():
     if not calculation_done and PRODUCT_CATALOG:
         ordered_items = []
         total_price = 0.0
-        found_items_for_billing = False
-        # 重新定义意图判断，使其更侧重于产品匹配和购买/价格关键词的组合
         is_buy_action = any(keyword in user_input_for_processing for keyword in buy_intent_keywords)
         is_price_action = any(keyword in user_input_for_processing for keyword in price_query_keywords)
         
-        # 提取用户提到的产品
-        extracted_user_items = [] # 存储用户提到的 (产品名, 数量)
-        # 这是一个非常简化的提取，实际应用中需要更强的NLP
+        extracted_user_items = [] 
         for catalog_key, product_details in PRODUCT_CATALOG.items():
             product_name_for_match = product_details['name'].lower()
-            # 尝试匹配 "数量 产品名" 或 "产品名"
-            # 这里的数量提取非常基础
             qty = 1
-            # 尝试匹配 "数字 产品名"
             m = re.search(f'([\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*({re.escape(product_name_for_match)}|{re.escape(product_details["original_display_name"].lower())})', user_input_for_processing)
             if m:
-                try: qty = int(m.group(1)) # 假设中文数字已转换为阿拉伯数字
+                try: qty = int(m.group(1)) 
                 except: qty = 1
                 extracted_user_items.append({'key': catalog_key, 'name': product_details['original_display_name'], 'qty': qty, 'details': product_details})
-                found_items_for_billing = True
             elif product_name_for_match in user_input_for_processing or product_details["original_display_name"].lower() in user_input_for_processing:
                  extracted_user_items.append({'key': catalog_key, 'name': product_details['original_display_name'], 'qty': 1, 'details': product_details})
-                 found_items_for_billing = True
 
-        if found_items_for_billing:
-            # 去重和合并数量
+        if extracted_user_items: # If any product was potentially identified
             merged_items_dict = {}
             for item in extracted_user_items:
                 item_key = item['key']
@@ -242,7 +192,7 @@ def chat():
                     'total': item_total
                 })
 
-            if processed_ordered_items: # 确保真的有处理过的物品
+            if processed_ordered_items: 
                 if len(processed_ordered_items) == 1 and is_price_action and not is_buy_action:
                     item = processed_ordered_items[0]
                     final_response = f"{item['name']} ({item['unit_desc']}) 的价格是 ${item['unit_price']:.2f}。"
@@ -254,74 +204,75 @@ def chat():
                         response_parts.append(f"\n总计：${total_price:.2f}")
                     final_response = "\n".join(response_parts)
                 calculation_done = True
-            elif is_buy_action or is_price_action: # 有意图但没匹配到
+            elif is_buy_action or is_price_action: 
                 final_response = "抱歉，我没有在菜单中准确识别到您提到的产品。您可以试试说出更完整的产品名称吗？"
                 calculation_done = True
-        elif is_buy_action or is_price_action: # 有意图但目录中完全没匹配到任何词
+        elif is_buy_action or is_price_action: 
              final_response = "您好！请问您想买些什么或者查询什么价格呢？可以说出具体的产品名称哦。"
              calculation_done = True
 
-    # 如果以上逻辑都未处理，则交由Gemini处理
+    # 如果没有完成本地处理 (算账、卖什么、推荐)，则调用LLM
     if not calculation_done:
-        if gemini_model:
+        if llm_client: # Check if DeepSeek client is initialized
             try:
-                system_prompt = (
-                    "你是一位经验丰富的果蔬营养顾问和生鲜采购专家。请用自然、亲切且专业的口吻与用户交流。"
+                system_message_content = (
+                    "你是一位经验丰富的果蔬生鲜客服。请用自然、亲切且专业的口吻与用户交流。"
                     "避免刻板的AI语言。你的目标是提供准确、有用的信息，让对话感觉轻松愉快。"
                     "专注于水果、蔬菜及相关农产品。如果用户询问无关内容，请委婉引导回主题。"
                     "如果用户问你有什么产品，请友好地介绍我们有多种生鲜，并鼓励用户问具体类别或产品。"
-                    "如果用户询问具体产品的价格或想下单，请根据产品目录信息准确回答。如果产品不在目录中，请礼貌告知。"
+                    "如果用户询问具体产品的价格或想下单，请告知你可以帮忙查询价格和计算总额，并引导用户说出想买的产品和数量。"
                     "如果用户只是打招呼，比如“你好”，请友好回应。"
                 )
-                full_prompt = f"{system_prompt}"
                 
-                # 只有在非明确的“卖什么”或“推荐”请求，且产品目录非空时，才附加产品列表给Gemini
+                messages = [
+                    {"role": "system", "content": system_message_content}
+                ]
+
+                # 只有在非明确的“卖什么”或“推荐”请求，且产品目录非空时，才附加产品列表给LLM
                 if PRODUCT_CATALOG and not is_what_do_you_sell_request and not is_recommend_request:
-                    full_prompt += "\n\n作为参考，这是我们目前的部分产品列表和价格（价格单位以实际规格为准）：\n"
-                    limited_catalog_for_prompt = ""
+                    catalog_context = "\n\n作为参考，这是我们目前的部分产品列表和价格（价格单位以实际规格为准）：\n"
                     count = 0
                     for name_key, details in PRODUCT_CATALOG.items():
                         display_name = details.get('original_display_name', name_key.capitalize())
-                        limited_catalog_for_prompt += f"- {display_name}: ${details['price']:.2f} / {details['specification']}\n"
+                        catalog_context += f"- {display_name}: ${details['price']:.2f} / {details['specification']}\n"
                         count += 1
-                        if count >= 5: # 减少给Gemini的列表长度
-                            limited_catalog_for_prompt += "...还有更多产品...\n"
+                        if count >= 7: # 减少给LLM的列表长度
+                            catalog_context += "...还有更多产品...\n"
                             break
-                    if not limited_catalog_for_prompt.strip():
-                        limited_catalog_for_prompt = "（目前产品列表参考信息未能加载）\n"
-                    full_prompt += limited_catalog_for_prompt
+                    if not catalog_context.strip().endswith("...还有更多产品...\n") and count == 0:
+                         catalog_context = "（目前产品列表参考信息未能加载或为空）\n"
+                    messages.append({"role": "system", "content": "产品参考信息：" + catalog_context})
                 
-                full_prompt += f"\n\n用户的问题是：\"{user_input}\""
+                messages.append({"role": "user", "content": user_input})
                 
-                print(f"Prompt to Gemini: {full_prompt}")
-                gemini_response = gemini_model.generate_content(full_prompt)
-                print(f"Gemini response object: {gemini_response}")
+                print(f"Messages to DeepSeek: {messages}") # 调试信息
 
-                if gemini_response and hasattr(gemini_response, 'text') and gemini_response.text:
-                    final_response = gemini_response.text
-                    print(f"Gemini response text: {final_response}")
+                chat_completion = llm_client.chat.completions.create(
+                    model="deepseek-chat", # As per user info
+                    messages=messages,
+                    max_tokens=1024, # Adjust as needed
+                    temperature=0.7 # Adjust as needed
+                )
+                
+                print(f"DeepSeek response object: {chat_completion}") # 调试信息
+                if chat_completion.choices and chat_completion.choices[0].message and chat_completion.choices[0].message.content:
+                    final_response = chat_completion.choices[0].message.content.strip()
+                    print(f"DeepSeek response text: {final_response}") 
                 else:
-                    print("Gemini response does not have .text attribute or .text is empty.")
+                    print("DeepSeek response structure not as expected or content is empty.")
                     final_response = "抱歉，AI助手暂时无法给出回复，请稍后再试。"
-                    if hasattr(gemini_response, 'prompt_feedback') and gemini_response.prompt_feedback:
-                        print(f"Gemini prompt feedback: {gemini_response.prompt_feedback}")
-                    elif hasattr(gemini_response, 'candidates') and gemini_response.candidates and len(gemini_response.candidates) > 0:
-                        print(f"Gemini candidates: {gemini_response.candidates}")
-                        # Try to extract from candidates if .text was missing
-                        try:
-                            final_response = "".join(part.text for part in gemini_response.candidates[0].content.parts if hasattr(part, 'text'))
-                            if not final_response.strip(): final_response = "AI助手收到了回复但内容为空。"
-                        except Exception:
-                            final_response = "AI助手返回了无法解析的回复结构。"
-                    else:
-                        final_response = "AI助手没有返回预期的文本回复结构。"
+
             except Exception as e:
-                print(f"调用 Gemini API 失败: {e}")
+                print(f"调用 DeepSeek API 失败: {e}")
                 final_response = "抱歉，AI助手暂时遇到问题，请稍后再试。"
-        else: # Gemini不可用
-            final_response = "抱歉，我现在无法处理您的请求，也无法连接到我的知识库。请稍后再试。"
+        else: # llm_client (DeepSeek) 不可用
+            final_response = "抱歉，我现在无法处理您的请求，AI服务未连接。请稍后再试。"
 
     return jsonify({'response': final_response})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # For local development, Gunicorn will be used on Render
+    # Ensure DEEPSEEK_API_KEY is set in your local environment for testing
+    if not DEEPSEEK_API_KEY:
+        print("本地运行警告：未设置 DEEPSEEK_API_KEY 环境变量，DeepSeek API 调用将失败。")
+    app.run(debug=True, host='0.0.0.0', port=os.environ.get('PORT', 5000))
