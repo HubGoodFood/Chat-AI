@@ -237,6 +237,25 @@ def find_related_category(query_text):
     """基于查询文本找到最相关的产品类别"""
     query_lower = query_text.lower()
     
+    # 常见水果和蔬菜关键词手动映射
+    fruit_keywords = ["苹果", "梨", "香蕉", "橙子", "橘子", "柚子", "葡萄", "西瓜", "哈密瓜", "草莓", "蓝莓", 
+                    "桃", "李子", "杏", "樱桃", "石榴", "山楂", "柿子", "猕猴桃", "菠萝", "芒果", "荔枝", "龙眼",
+                    "榴莲", "木瓜", "枇杷", "山竹", "椰子", "甘蔗", "柑橘", "金橘", "枣", "无花果", "杨梅", "柠檬"]
+    
+    vegetable_keywords = ["白菜", "卷心菜", "生菜", "菠菜", "空心菜", "韭菜", "芹菜", "茼蒿", "油菜", "花椰菜",
+                        "西兰花", "芦笋", "竹笋", "藕", "土豆", "红薯", "山药", "芋头", "茄子", "辣椒", "青椒", 
+                        "番茄", "黄瓜", "冬瓜", "南瓜", "丝瓜", "苦瓜", "豆角", "豌豆", "蚕豆", "毛豆", "莲子",
+                        "玉米", "洋葱", "大蒜", "生姜", "胡萝卜", "白萝卜", "芥菜", "莴笋", "香菜", "葱", "蒜", "姜"]
+    
+    # 检查关键词是否在查询中
+    for keyword in fruit_keywords:
+        if keyword in query_lower:
+            return "水果"
+            
+    for keyword in vegetable_keywords:
+        if keyword in query_lower:
+            return "蔬菜"
+    
     # 1. 直接在查询中查找类别名称
     for category in PRODUCT_CATEGORIES.keys():
         if category.lower() in query_lower:
@@ -257,6 +276,12 @@ def find_related_category(query_text):
     if category_scores:
         # 返回得分最高的类别
         return max(category_scores.items(), key=lambda x: x[1])[0]
+    
+    # 如果以上都没找到，使用一些启发式规则
+    if any(word in query_lower for word in ["吃", "食", "鲜", "甜", "新鲜", "水果"]):
+        return "水果"
+    if any(word in query_lower for word in ["菜", "素", "绿色", "蔬菜"]):
+        return "蔬菜"
     
     return None
 
@@ -614,7 +639,7 @@ def chat():
                 final_response = "\n".join(response_parts)
                 calculation_done = True
         
-        elif is_buy_action or is_price_action or is_what_do_you_sell_request:
+        elif is_buy_action or is_price_action or is_what_do_you_sell_request or is_recommend_request:
             # 尝试提取查询的产品关键词
             query_product = None
             best_match = 0
@@ -633,6 +658,7 @@ def chat():
             
             # 找到相关类别
             related_category = find_related_category(user_input)
+            print(f"查询相关类别: {related_category}, 查询产品关键词: {query_product}")
             
             # 获取相关推荐
             recommendation_items = []
@@ -644,40 +670,82 @@ def chat():
                     product_name = details['name'].lower()
                     if query_product in product_name:
                         recommendation_items.append((key, details, f"与'{query_product}'相关"))
+            
+            # 2. 如果通过关键词没找到足够推荐，但能识别类别，则使用类别推荐
+            if len(recommendation_items) < 2 and related_category:
+                # 确保该类别存在于产品目录中
+                category_exists = False
+                for _, details in PRODUCT_CATALOG.items():
+                    if details.get('category', '').lower() == related_category.lower():
+                        category_exists = True
+                        break
                 
-                if len(recommendation_items) > 0:
-                    final_response = f"抱歉，我们目前没有找到您查询的完整产品。您可能对以下相关商品感兴趣：\n\n"
-                    for key, details, tag in recommendation_items[:3]:
-                        seasonal_tag = ""
-                        if key in SEASONAL_PRODUCTS:
-                            seasonal_tag = "【当季新鲜】"
-                        description = details.get('description', '')
-                        desc_text = f" - {description}" if description else ""
-                        final_response += f"- {seasonal_tag}{details['original_display_name']}: ${details['price']:.2f}/{details['specification']}{desc_text}\n"
+                # 如果产品目录中存在此类别，使用该类别的产品
+                if category_exists:
+                    category_products = get_products_by_category(related_category, 3)
+                    for key, details in category_products:
+                        if all(key != rec[0] for rec in recommendation_items):
+                            recommendation_items.append((key, details, f"{related_category}类商品"))
+                # 如果产品目录中没有此类别，但类别是"水果"或"蔬菜"，尝试找近似类别
+                elif related_category in ["水果", "蔬菜"]:
+                    fruit_categories = ["水果", "新鲜水果", "时令水果", "进口水果"]
+                    veg_categories = ["蔬菜", "新鲜蔬菜", "时令蔬菜", "绿叶蔬菜"]
                     
-                    last_identified_product_key_for_context = None
-                    calculation_done = True
+                    target_categories = fruit_categories if related_category == "水果" else veg_categories
+                    
+                    # 尝试从相似类别中获取产品
+                    for cat in target_categories:
+                        for key, details in PRODUCT_CATALOG.items():
+                            if details.get('category', '').lower() == cat.lower():
+                                if all(key != rec[0] for rec in recommendation_items):
+                                    recommendation_items.append((key, details, f"{related_category}类商品"))
+                                if len(recommendation_items) >= 3:
+                                    break
+                        if len(recommendation_items) >= 3:
+                            break
             
-            # 2. 如果有相关类别，推荐该类别的产品
-            elif related_category and related_category in PRODUCT_CATEGORIES:
-                category_products = get_products_by_category(related_category, 3)
-                final_response = f"抱歉，我们目前没有您查询的产品。不过，我们有以下{related_category}类商品：\n\n"
-                for key, details in category_products:
-                    seasonal_tag = ""
-                    if key in SEASONAL_PRODUCTS:
-                        seasonal_tag = "【当季新鲜】"
-                    description = details.get('description', '')
-                    desc_text = f" - {description}" if description else ""
-                    final_response += f"- {seasonal_tag}{details['original_display_name']}: ${details['price']:.2f}/{details['specification']}{desc_text}\n"
+            # 3. 如果关键词和类别都没有找到足够推荐，使用当季产品补充
+            if len(recommendation_items) < 3:
+                seasonal_products = []
+                for key in SEASONAL_PRODUCTS:
+                    if key in PRODUCT_CATALOG and all(key != rec[0] for rec in recommendation_items):
+                        # 如果有类别限制，则只添加相同类别的产品
+                        if related_category:
+                            details = PRODUCT_CATALOG[key]
+                            if details.get('category', '').lower() == related_category.lower():
+                                seasonal_products.append((key, details, "当季推荐"))
+                        else:
+                            seasonal_products.append((key, PRODUCT_CATALOG[key], "当季推荐"))
                 
-                last_identified_product_key_for_context = None
-                calculation_done = True
+                # 添加适量的当季产品
+                for i in range(min(3 - len(recommendation_items), len(seasonal_products))):
+                    recommendation_items.append(seasonal_products[i])
             
-            # 3. 否则，使用默认回复
+            # 4. 如果当季产品也不够，使用热门产品补充
+            if len(recommendation_items) < 3:
+                popular_products = get_popular_products(3 - len(recommendation_items))
+                for key, details in popular_products:
+                    if all(key != rec[0] for rec in recommendation_items):
+                        recommendation_items.append((key, details, "热门商品"))
+            
+            # 准备回复
+            if query_product or related_category:
+                query_desc = f"'{query_product}'" if query_product else f"{related_category}类产品"
+                final_response = f"抱歉，我们目前没有您查询的{query_desc}。不过，您可能对以下商品感兴趣：\n\n"
             else:
-                final_response = "抱歉，我没有在菜单中找到您提到的产品。您可以询问我们有什么水果、蔬菜或其他生鲜产品。"
-                calculation_done = True
-                last_identified_product_key_for_context = None
+                final_response = f"为您推荐几款我们这里的优选好物：\n\n"
+                
+            for key, details, tag in recommendation_items[:3]:
+                seasonal_tag = ""
+                if key in SEASONAL_PRODUCTS:
+                    seasonal_tag = "【当季新鲜】"
+                description = details.get('description', '')
+                desc_text = f" - {description}" if description else ""
+                final_response += f"- {seasonal_tag}{details['original_display_name']}: ${details['price']:.2f}/{details['specification']}{desc_text}\n"
+            
+            final_response += "\n您对哪个感兴趣，想了解更多，还是需要其他推荐？"
+            last_identified_product_key_for_context = None
+            calculation_done = True
 
     # 如果以上逻辑都未处理，则交由LLM处理
     if not calculation_done:
