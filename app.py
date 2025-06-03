@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify, render_template
 import os
-from openai import OpenAI # ADDED for DeepSeek (OpenAI compatible)
 import re
 import csv
 import random # Ensure random is imported at the top level
