@@ -32,6 +32,7 @@ PRODUCT_CATALOG = {}
 PRODUCT_CATEGORIES = {} # 用于存储每个类别的产品列表
 ALL_PRODUCT_KEYWORDS = [] # 用于存储所有产品关键词
 last_identified_product_key_for_context = None # 用于存储上一个明确处理的产品的key
+last_identified_product_details = None # 新增：存储上一个产品的完整详情
 # 添加用户历史记录和热门商品跟踪
 USER_HISTORY = {} # 简单的用户历史记录 {user_id: [product_keys]}
 POPULAR_PRODUCTS = {} # 热门商品计数 {product_key: count}
@@ -305,13 +306,26 @@ def index():
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    global last_identified_product_key_for_context
+    global last_identified_product_key_for_context, last_identified_product_details
     print("--- Chat route entered ---")
+    print(f"上一次查询的产品: {last_identified_product_key_for_context}")
     user_input = request.json.get('message', '')
-    user_id = request.json.get('user_id', 'anonymous')  # 可选的用户ID跟踪
+    user_id = request.json.get('user_id', 'anonymous')
     user_input_for_processing = user_input.lower()
     calculation_done = False
     final_response = ""
+
+    # 检查是否是对上一个产品的追问
+    follow_up_keywords = ["它", "这个", "那个", "这", "那", "刚才", "刚刚"]
+    is_follow_up = any(keyword in user_input_for_processing for keyword in follow_up_keywords)
+    
+    if is_follow_up and last_identified_product_key_for_context:
+        print(f"检测到对产品 '{last_identified_product_key_for_context}' 的追问")
+        # 将上一次的产品信息添加到用户输入中
+        if last_identified_product_details:
+            product_name = last_identified_product_details['original_display_name']
+            user_input_for_processing = f"{user_input_for_processing} {product_name}"
+            print(f"扩展后的查询: {user_input_for_processing}")
 
     # --- 意图识别关键词 ---
     buy_intent_keywords = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只"]
@@ -767,7 +781,7 @@ def chat():
 
     # 如果以上逻辑都未处理，则交由LLM处理
     if not calculation_done:
-        if llm_client: # Changed from gemini_model to llm_client
+        if llm_client:
             try:
                 system_prompt = (
                     "你是一位专业的生鲜产品客服。你的回答应该友好、自然且专业。"
@@ -780,6 +794,7 @@ def chat():
                     "6. 专注于水果、蔬菜及相关生鲜产品。如果用户询问完全无关的话题，请委婉地引导回我们的产品和服务。"
                     "7. 推荐产品时，请着重突出当季新鲜产品，并尽量提供产品特点、口感或用途等信息，让推荐更有说服力。"
                     "8. 如果用户询问某个特定类别的产品，请专注于提供该类别的产品信息，并根据产品描述给出个性化建议。"
+                    "9. 如果用户提到'刚才'、'刚刚'等词，请注意可能是在询问上一个提到的产品。"
                 )
                 
                 messages = [{"role": "system", "content": system_prompt}]
@@ -926,6 +941,10 @@ def chat():
             final_response = "抱歉，我现在无法处理您的请求，AI服务未连接。请稍后再试。"
         last_identified_product_key_for_context = None
 
+    # 更新上下文信息
+    if last_identified_product_key_for_context:
+        last_identified_product_details = PRODUCT_CATALOG.get(last_identified_product_key_for_context)
+    
     # 记录用户查询历史和更新热门商品
     if last_identified_product_key_for_context:
         if user_id not in USER_HISTORY:
