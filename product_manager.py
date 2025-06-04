@@ -2,6 +2,7 @@ import re
 import csv
 import random
 import logging
+import os
 import config
 from cache_manager import CacheManager, cached
 
@@ -39,6 +40,10 @@ class ProductManager:
         Returns:
             bool: 加载是否成功
         """
+        # 如果提供相对路径，解析为相对于当前文件的路径
+        if not os.path.isabs(file_path):
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            file_path = os.path.join(base_dir, file_path)
         # 尝试从缓存加载
         cached_data = self.cache_manager.get_cached_product_data()
         if cached_data:
@@ -54,7 +59,7 @@ class ProductManager:
         self.product_categories = {} 
         self.all_product_keywords = [] 
         self.seasonal_products = []
-        expected_headers = ['ProductName', 'Specification', 'Price', 'Unit', 'Category', 'Description', 'IsSeasonal']
+        expected_headers = ['ProductName', 'Specification', 'Price', 'Unit', 'Category', 'Description', 'IsSeasonal', 'Keywords']
         
         try:
             with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile: 
@@ -64,6 +69,7 @@ class ProductManager:
                 # 检查是否有必要的列
                 has_description = 'Description' in (reader.fieldnames or [])
                 has_seasonal = 'IsSeasonal' in (reader.fieldnames or [])
+                has_keywords = 'Keywords' in (reader.fieldnames or [])
                 
                 if not reader.fieldnames or not all(col in reader.fieldnames for col in ['ProductName', 'Specification', 'Price', 'Unit', 'Category']):
                     logger.error(f"CSV文件 {file_path} 的基本列标题不正确。必须包含: ProductName, Specification, Price, Unit, Category")
@@ -79,6 +85,8 @@ class ProductManager:
                         # 读取可选列
                         description = row.get('Description', '').strip() if has_description else ""
                         is_seasonal = row.get('IsSeasonal', '').strip().lower() in ['true', 'yes', '1', 'y'] if has_seasonal else False
+                        keywords_text = row.get('Keywords', '').strip() if has_keywords else ""
+                        keywords = [k.lower() for k in re.split(r'[;,\s]+', keywords_text) if k.strip()]
 
                         if not product_name or not price_str or not specification or not unit or not category:
                             logger.warning(f"CSV文件第 {row_num+1} 行数据不完整，已跳过: {row}")
@@ -98,6 +106,7 @@ class ProductManager:
                             'original_display_name': unique_product_key,
                             'description': description,
                             'is_seasonal': is_seasonal,
+                            'keywords': keywords,
                             'popularity': 0
                         }
                         
@@ -160,6 +169,11 @@ class ProductManager:
             for word in re.findall(r'[\w\u4e00-\u9fff]+', product_name):
                 if len(word) > 1 and word not in keywords:
                     keywords.append(word)
+
+            # 添加自定义关键词
+            for kw in details.get('keywords', []):
+                if kw and kw not in keywords:
+                    keywords.append(kw)
                     
         return keywords
     
@@ -382,6 +396,20 @@ class ProductManager:
         Returns:
             int: 转换后的整数，如未找到匹配则默认为1
         """
-        num_map = {'一': 1, '二': 2, '两': 2, '三': 3, '四': 4, 
-                  '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
-        return num_map.get(text, 1) 
+        num_map = {'零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
+                  '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+        text = text.strip()
+
+        # 直接匹配单个数字
+        if text in num_map:
+            return num_map[text]
+
+        # 处理十到九十九
+        match = re.fullmatch(r'([一二两三四五六七八九])?十([一二三四五六七八九])?', text)
+        if match:
+            tens_char, ones_char = match.groups()
+            tens = num_map.get(tens_char, 1)
+            ones = num_map.get(ones_char, 0)
+            return tens * 10 + ones
+
+        return 1

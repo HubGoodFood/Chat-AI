@@ -42,10 +42,12 @@ LLM_MODEL_NAME = "deepseek-chat" # 模型名称
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
 # --- 其他配置 ---
-PRODUCT_DATA_FILE = "products.csv" 
+import os
+
+# 允许通过环境变量自定义产品 CSV 路径，默认使用仓库根目录下的 products.csv
+PRODUCT_DATA_FILE = os.getenv("PRODUCT_DATA_FILE", "products.csv")
 
 # --- LLM Client Initialization ---
-import os
 from openai import OpenAI # 确保 openai 库被导入
 import logging
 
