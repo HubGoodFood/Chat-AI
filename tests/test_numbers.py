@@ -21,5 +21,16 @@ class TestChineseNumberConversion(unittest.TestCase):
     def test_unknown(self):
         self.assertEqual(self.pm.convert_chinese_number_to_int('百'), 1)
 
+
+class TestFuzzyMatch(unittest.TestCase):
+    def setUp(self):
+        self.pm = ProductManager()
+        self.pm.load_product_data()
+
+    def test_match_mother_chicken(self):
+        results = self.pm.fuzzy_match_product('母鸡多少钱', threshold=0.05)
+        self.assertTrue(results, 'No products matched the query')
+        self.assertEqual(results[0][0], '农场素食散养走地萨松母鸡')
+
 if __name__ == '__main__':
     unittest.main()
