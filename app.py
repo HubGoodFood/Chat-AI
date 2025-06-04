@@ -37,12 +37,12 @@ try:
         if os.environ.get('APP_ENV') == 'production':
             logger.critical("生产环境中无法加载产品数据，应用退出")
             sys.exit(1)  # 在生产环境中退出
-else:
+        else: # 这个else属于上面的if
             logger.warning("开发环境中无法加载产品数据，继续运行但功能可能受限")
-    except Exception as e:
-    logger.exception(f"加载产品数据时发生异常: {e}")
+except Exception as e:
+    logger.exception(f"加载产品数据时发生致命异常: {e}")
     if os.environ.get('APP_ENV') == 'production':
-        logger.critical("生产环境中加载产品数据异常，应用退出")
+        logger.critical("生产环境中加载产品数据异常导致应用退出")
         sys.exit(1)  # 在生产环境中退出
     else:
         logger.warning("开发环境中加载产品数据异常，继续运行但功能可能受限")
@@ -53,7 +53,7 @@ try:
                                policy_manager=policy_manager,
                                cache_manager=cache_manager)
     logger.info("聊天处理器初始化成功")
-                except Exception as e:
+except Exception as e:
     logger.exception(f"初始化聊天处理器时发生异常: {e}")
     if os.environ.get('APP_ENV') == 'production':
         logger.critical("生产环境中初始化聊天处理器异常，应用退出")
@@ -61,13 +61,19 @@ try:
     else:
         # 在开发环境中，尝试使用最基本的配置初始化
         logger.warning("尝试使用基本配置初始化聊天处理器")
-        chat_handler = ChatHandler(product_manager=product_manager)
+        try:
+            chat_handler = ChatHandler(product_manager=product_manager)
+            logger.info("已使用基本配置成功初始化聊天处理器。")
+        except Exception as basic_init_e:
+            logger.exception(f"使用基本配置初始化聊天处理器也失败: {basic_init_e}")
+            logger.critical("无法初始化聊天处理器，应用将无法处理聊天。请检查配置。")
+            chat_handler = None # 明确设置为 None，后续使用前需要检查
 
 @app.route('/')
 def index():
     """渲染主聊天页面。"""
     try:
-    return render_template('index.html')
+        return render_template('index.html')
     except Exception as e:
         logger.exception(f"渲染首页时发生异常: {e}")
         return "系统维护中，请稍后再试", 500
