@@ -141,7 +141,8 @@ class ChatHandler:
             
         Returns:
             str: 意图类型 ('quantity_follow_up', 'what_do_you_sell',
-                         'recommendation', 'price_or_buy', 'policy_question', 'unknown')
+                         'seasonal_list', 'recommendation', 'price_or_buy',
+                         'policy_question', 'unknown')
         """
         # 检查是否是纯数量追问
         quantity_pattern = r'^\s*([\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*(?:呢|呀|啊|吧|多少钱|总共)?\s*$'
