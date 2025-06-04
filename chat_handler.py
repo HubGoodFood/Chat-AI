@@ -33,6 +33,11 @@ class ChatHandler:
         self._last_identified_product_key = None
         self._last_identified_product_details = None
         
+        # 用于处理纯粹价格追问的关键词
+        self.PURE_PRICE_QUERY_KEYWORDS = ["多少钱", "什么价", "价格是", "几多钱", "价格", "售价"]
+        self.PURE_POLICY_QUERY_KEYWORDS = ["什么政策", "政策是", "规定是", "有啥规定"]
+        # 可以继续添加其他纯粹查询的关键词列表，例如针对库存、描述等
+        
     @property
     def last_identified_product_key(self):
         """获取最后识别的产品key"""
@@ -120,16 +125,40 @@ class ChatHandler:
         
         # 获取用户会话
         session = self.get_user_session(user_id)
-        
-        # 处理上下文追问
+        last_product_details = session.get('last_product_details')
+
+        # 1. 处理纯粹的查询追问 (例如，在识别出"草莓"后，用户直接问"多少钱？")
+        if last_product_details:
+            product_name_for_context = last_product_details.get('original_display_name')
+            if not product_name_for_context:
+                product_name_for_context = last_product_details.get('name')
+
+            if product_name_for_context:
+                # 构建一个正则表达式来匹配纯粹查询词，允许末尾有可选的语气词
+                normalized_input = re.sub(r"([呢呀啊吧吗？?！!]$)|('s)", '', user_input_processed).strip() # 移除末尾语气词和's
+                
+                is_pure_price_query = any(keyword == normalized_input for keyword in self.PURE_PRICE_QUERY_KEYWORDS)
+                # 可以为 PURE_POLICY_QUERY_KEYWORDS 等其他列表添加类似的检查
+                # is_pure_policy_query = any(keyword == normalized_input for keyword in self.PURE_POLICY_QUERY_KEYWORDS)
+
+                if is_pure_price_query: # 或者 is_pure_policy_query 等
+                    user_input_processed = f"{product_name_for_context} {user_input_processed}"
+                    logger.debug(f"扩展后的查询 (纯粹价格/政策等追问): {user_input_processed}")
+                    # 一旦处理了这种纯粹追问，可以提前返回，避免后续的通用追问逻辑冲突
+                    return user_input_processed, user_input_original
+
+        # 2. 处理通用的上下文追问 (例如，在识别出"草莓"后，用户问"它新鲜吗？")
         is_follow_up = any(keyword in user_input_processed 
                           for keyword in config.FOLLOW_UP_KEYWORDS)
         
-        if is_follow_up and session['last_product_details']:
-            product_name = session['last_product_details']['original_display_name']
-            if product_name.lower() not in user_input_processed:
+        if is_follow_up and last_product_details:
+            product_name = last_product_details.get('original_display_name')
+            if not product_name:
+                 product_name = last_product_details.get('name')
+
+            if product_name and product_name.lower() not in user_input_processed: # 确保产品名没在原始输入中，避免重复添加
                 user_input_processed = f"{product_name} {user_input_processed}"
-                logger.debug(f"扩展后的查询 (追问): {user_input_processed}")
+                logger.debug(f"扩展后的查询 (通用追问): {user_input_processed}")
                 
         return user_input_processed, user_input_original
         
@@ -256,7 +285,7 @@ class ChatHandler:
         else: 
             return "抱歉，我们的产品列表暂时还没有加载好。"
 
-    def handle_recommendation(self, user_input_processed: str, user_id: str) -> str:
+    def handle_recommendation(self, user_input_processed: str, user_id: str, direct_category: Optional[str] = None) -> str:
         """处理用户的产品推荐请求。
 
         逻辑：
@@ -268,6 +297,7 @@ class ChatHandler:
         Args:
             user_input_processed (str): 处理过的用户输入（小写）。
             user_id (str): 用户ID。
+            direct_category (Optional[str], optional): 直接指定的目标类别. Defaults to None.
 
         Returns:
             str: 回复字符串，包含推荐的产品列表。
@@ -275,13 +305,31 @@ class ChatHandler:
         if not self.product_manager.product_catalog:
             return "我们的产品正在准备中，暂时无法为您推荐，非常抱歉！"
 
-        target_category = self.product_manager.find_related_category(user_input_processed)
-        if not target_category:
-            for cat_name_from_csv in self.product_manager.product_categories.keys():
-                if cat_name_from_csv.lower() in user_input_processed:
-                    target_category = cat_name_from_csv
-                    break
-        logger.info(f"推荐请求的目标类别: {target_category}")
+        # --- 这部分代码是期望替换原有类别判断逻辑的 ---
+        # 首先，初始化目标类别为 None
+        target_category = None 
+        
+        if direct_category:
+            # 如果直接指定了类别，就用它
+            target_category = direct_category
+            logger.info(f"Using direct_category for recommendation: {target_category}")
+        else:
+            # 否则，尝试从用户输入中解析类别
+            category_from_input = self.product_manager.find_related_category(user_input_processed)
+            if not category_from_input: # 如果上一步没找到
+                # 再尝试从产品目录的类别名称中查找
+                for cat_name_from_csv in self.product_manager.product_categories.keys():
+                    if cat_name_from_csv.lower() in user_input_processed:
+                        category_from_input = cat_name_from_csv
+                        logger.info(f"Found category '{category_from_input}' from product_categories in input.")
+                        break
+            
+            if category_from_input: # 如果从输入中成功解析出类别
+                target_category = category_from_input
+        
+        # 经过以上步骤，target_category 要么是 direct_category，要么是从输入中解析出的类别，要么是 None
+        logger.info(f"推荐请求最终的目标类别: {target_category}")
+        # --- 替换结束 ---
 
         response_parts = []
         if target_category:
@@ -340,8 +388,12 @@ class ChatHandler:
         else:
             response_parts.append("我们的产品正在精心准备中，暂时无法为您提供具体推荐，非常抱歉！")
         
-        # 推荐后清除特定产品上下文
-        self.update_user_session(user_id, product_key=None, product_details=None)
+        # 更新会话，保存推荐上下文（如果适用）并清除特定产品上下文
+        context_updates = {}
+        if target_category and recommended_products: # 只有成功推荐了特定类别的产品才保存
+            context_updates['last_recommendation_category'] = target_category
+        
+        self.update_user_session(user_id, product_key=None, product_details=None, context_updates=context_updates)
         return "\n".join(response_parts)
 
     def handle_policy_question(self, user_input_processed: str) -> Optional[str]:
@@ -421,7 +473,7 @@ class ChatHandler:
             response_str += "\n您对哪个感兴趣，想了解更多，还是需要其他推荐？"
             return response_str
         # 如果没有任何推荐，返回"产品不存在"的提示
-        return f"抱歉，我们暂时没有“{user_input_original}”这款产品。您可以问我其他产品，或者让我为您推荐同类商品。"
+        return f"抱歉，我们暂时没有'{user_input_original}'这款产品。您可以问我其他产品，或者让我为您推荐同类商品。"
 
     def handle_price_or_buy(self, user_input_processed: str, user_input_original: str, user_id: str) -> Tuple[Optional[str], bool, Optional[str]]:
         """处理用户的价格查询或购买意图。
@@ -815,6 +867,19 @@ class ChatHandler:
                 intent_handled = True
                 new_context_key = ctx_key
         
+        elif intent == 'recommendation_follow_up':
+            last_rec_category = session.get('context', {}).get('last_recommendation_category')
+            if last_rec_category:
+                logger.info(f"Handling recommendation_follow_up for category: {last_rec_category}")
+                # 调用 handle_recommendation 时，第一个参数 user_input_processed 可以是原始的追问（如"还有其他的吗"）
+                # 因为此时类别已经由 direct_category 指定了，user_input_processed 主要用于日志或潜在的更细致的语义理解（如果未来需要）
+                final_response = self.handle_recommendation(user_input_processed, user_id, direct_category=last_rec_category)
+            else:
+                logger.info("recommendation_follow_up, but no last_recommendation_category in session context.")
+                final_response = "您希望我继续推荐哪一类的产品呢？比如水果、蔬菜或者其他。"
+            intent_handled = True
+            new_context_key = None # 继续推荐一般不设定特定产品上下文
+
         if not intent_handled:
             logger.info("No specific intent handled by rules, falling back to LLM.")
             final_response = self.handle_llm_fallback(user_input_original, user_input_processed, user_id)

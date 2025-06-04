@@ -37,9 +37,9 @@ try:
         if os.environ.get('APP_ENV') == 'production':
             logger.critical("生产环境中无法加载产品数据，应用退出")
             sys.exit(1)  # 在生产环境中退出
-        else:
+else:
             logger.warning("开发环境中无法加载产品数据，继续运行但功能可能受限")
-except Exception as e:
+    except Exception as e:
     logger.exception(f"加载产品数据时发生异常: {e}")
     if os.environ.get('APP_ENV') == 'production':
         logger.critical("生产环境中加载产品数据异常，应用退出")
@@ -53,7 +53,7 @@ try:
                                policy_manager=policy_manager,
                                cache_manager=cache_manager)
     logger.info("聊天处理器初始化成功")
-except Exception as e:
+                except Exception as e:
     logger.exception(f"初始化聊天处理器时发生异常: {e}")
     if os.environ.get('APP_ENV') == 'production':
         logger.critical("生产环境中初始化聊天处理器异常，应用退出")
@@ -67,7 +67,7 @@ except Exception as e:
 def index():
     """渲染主聊天页面。"""
     try:
-        return render_template('index.html')
+    return render_template('index.html')
     except Exception as e:
         logger.exception(f"渲染首页时发生异常: {e}")
         return "系统维护中，请稍后再试", 500
