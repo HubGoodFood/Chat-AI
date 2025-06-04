@@ -1,4 +1,5 @@
 # config.py
+import os
 
 # --- 模糊匹配配置 ---
 FUZZY_MATCH_THRESHOLD = 0.6
@@ -9,6 +10,16 @@ PRICE_QUERY_KEYWORDS = ["多少钱", "价格是", "什么价", "价钱"]
 WHAT_DO_YOU_SELL_KEYWORDS = ["卖什么", "有什么产品", "商品列表", "菜单", "有哪些东西", "有什么卖"]
 RECOMMEND_KEYWORDS = ["推荐", "介绍点", "什么好吃", "什么值得买", "有什么好", "当季", "新鲜"]
 FOLLOW_UP_KEYWORDS = ["它", "这个", "那个", "这", "那", "刚才", "刚刚"]
+
+# --- 平台政策关键词 ---
+POLICY_KEYWORD_MAP = {
+    "delivery": ["配送", "送货", "运费", "截单"],
+    "refund": ["退款", "退货", "质量", "credit"],
+    "payment": ["付款", "支付", "venmo", "汇款"],
+    "pickup": ["取货", "自取", "取货点", "地址"]
+}
+
+POLICY_FILE = os.getenv("POLICY_FILE", "policy.md")
 
 # --- 产品类别关键词 ---
 FRUIT_KEYWORDS = ["苹果", "梨", "香蕉", "橙子", "橘子", "柚子", "葡萄", "西瓜", "哈密瓜", "草莓", "蓝莓",
@@ -42,7 +53,6 @@ LLM_MODEL_NAME = "deepseek-chat" # 模型名称
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
 # --- 其他配置 ---
-import os
 
 # 允许通过环境变量自定义产品 CSV 路径，默认使用仓库根目录下的 products.csv
 PRODUCT_DATA_FILE = os.getenv("PRODUCT_DATA_FILE", "products.csv")

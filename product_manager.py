@@ -85,6 +85,10 @@ class ProductManager:
                         # 读取可选列
                         description = row.get('Description', '').strip() if has_description else ""
                         is_seasonal = row.get('IsSeasonal', '').strip().lower() in ['true', 'yes', '1', 'y'] if has_seasonal else False
+                        if not is_seasonal:
+                            cat_lower = category.lower()
+                            if '时令' in cat_lower or '当季' in cat_lower or 'seasonal' in cat_lower:
+                                is_seasonal = True
                         keywords_text = row.get('Keywords', '').strip() if has_keywords else ""
                         keywords = [k.lower() for k in re.split(r'[;,\s]+', keywords_text) if k.strip()]
 
@@ -150,7 +154,16 @@ class ProductManager:
             if self.seasonal_products:
                 logger.info(f"当季推荐产品: {len(self.seasonal_products)} 条")
             return True
-    
+
+    def _tokenize(self, text):
+        """Tokenize text into alphanumeric words and Chinese characters/bigrams"""
+        text = text.lower()
+        tokens = re.findall(r'[A-Za-z0-9]+', text)
+        for seq in re.findall(r'[\u4e00-\u9fff]+', text):
+            tokens.extend(list(seq))
+            tokens.extend([seq[i:i+2] for i in range(len(seq)-1)])
+        return tokens
+
     def _extract_all_keywords(self):
         """从产品目录中提取所有关键词
         
@@ -166,14 +179,15 @@ class ProductManager:
                 keywords.append(product_name)
                 
             # 添加单个词作为关键词
-            for word in re.findall(r'[\w\u4e00-\u9fff]+', product_name):
+            for word in self._tokenize(product_name):
                 if len(word) > 1 and word not in keywords:
                     keywords.append(word)
 
             # 添加自定义关键词
             for kw in details.get('keywords', []):
-                if kw and kw not in keywords:
-                    keywords.append(kw)
+                for tok in self._tokenize(kw):
+                    if tok and tok not in keywords:
+                        keywords.append(tok)
                     
         return keywords
     
@@ -287,14 +301,16 @@ class ProductManager:
             return direct_matches
 
         # 2. 尝试关键词部分匹配 (Jaccard相似度)
-        query_words = set(re.findall(r'[\w\u4e00-\u9fff]+', query_lower))
+        query_words = set(self._tokenize(query_lower))
         if not query_words:
             return []
 
         for key, details in self.product_catalog.items():
-            product_name_words = set(re.findall(r'[\w\u4e00-\u9fff]+', details['name'].lower()))
-            product_key_words = set(re.findall(r'[\w\u4e00-\u9fff]+', key))
-            keywords_words = set(details.get('keywords', []))
+            product_name_words = set(self._tokenize(details['name'].lower()))
+            product_key_words = set(self._tokenize(key))
+            keywords_words = set()
+            for kw in details.get('keywords', []):
+                keywords_words.update(self._tokenize(kw))
 
             # 名称和key的Jaccard相似度
             intersection_name = query_words.intersection(product_name_words)

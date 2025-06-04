@@ -4,6 +4,7 @@ import config
 from typing import Tuple, Optional, Dict, Any
 from cache_manager import CacheManager
 from product_manager import ProductManager
+from policy_manager import PolicyManager
 import random
 
 # 配置日志
@@ -12,7 +13,9 @@ logger = logging.getLogger(__name__)
 class ChatHandler:
     """聊天处理类，负责处理用户输入和意图识别"""
     
-    def __init__(self, product_manager: ProductManager, cache_manager: CacheManager = None):
+    def __init__(self, product_manager: ProductManager,
+                 policy_manager: PolicyManager = None,
+                 cache_manager: CacheManager = None):
         """初始化聊天处理器
         
         Args:
@@ -20,6 +23,7 @@ class ChatHandler:
             cache_manager (CacheManager, optional): 缓存管理器实例
         """
         self.product_manager = product_manager
+        self.policy_manager = policy_manager or PolicyManager()
         self.cache_manager = cache_manager or CacheManager()
         
         # 用户会话状态
@@ -136,8 +140,8 @@ class ChatHandler:
             user_input_processed (str): 处理后的用户输入
             
         Returns:
-            str: 意图类型 ('quantity_follow_up', 'what_do_you_sell', 
-                         'recommendation', 'price_or_buy', 'unknown')
+            str: 意图类型 ('quantity_follow_up', 'what_do_you_sell',
+                         'recommendation', 'price_or_buy', 'policy_question', 'unknown')
         """
         # 检查是否是纯数量追问
         quantity_pattern = r'^\s*([\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*(?:呢|呀|啊|吧|多少钱|总共)?\s*$'
@@ -145,15 +149,25 @@ class ChatHandler:
             return 'quantity_follow_up'
             
         # 检查是否询问"卖什么"
-        if any(keyword in user_input_processed 
+        if any(keyword in user_input_processed
                for keyword in config.WHAT_DO_YOU_SELL_KEYWORDS):
             return 'what_do_you_sell'
+
+        # 检查是否询问当季产品数量或列表
+        if (('当季' in user_input_processed or '时令' in user_input_processed) and
+            any(x in user_input_processed for x in ['多少', '几', '其他', '全部'])):
+            return 'seasonal_list'
             
         # 检查是否是推荐请求
         if any(keyword in user_input_processed 
                for keyword in config.RECOMMEND_KEYWORDS):
             return 'recommendation'
             
+        # 检查是否是政策相关问题
+        for keywords in config.POLICY_KEYWORD_MAP.values():
+            if any(k in user_input_processed for k in keywords):
+                return 'policy_question'
+
         # 检查是否是价格查询或购买意图
         if (any(keyword in user_input_processed for keyword in config.PRICE_QUERY_KEYWORDS) or
             any(keyword in user_input_processed for keyword in config.BUY_INTENT_KEYWORDS)):
@@ -330,7 +344,34 @@ class ChatHandler:
         
         # 推荐后清除特定产品上下文
         self.update_user_session(user_id, product_key=None, product_details=None)
-        return "\n".join(response_parts) 
+        return "\n".join(response_parts)
+
+    def handle_seasonal_list(self) -> str:
+        """列出所有当季或时令产品并给出总数"""
+        seasonal_keys = self.product_manager.seasonal_products
+        if not seasonal_keys:
+            return "目前没有标记为当季的产品。"
+
+        lines = [f"我们目前共有{len(seasonal_keys)}款当季产品："]
+        for key in seasonal_keys:
+            details = self.product_manager.product_catalog.get(key)
+            if details:
+                lines.append(f"- {details['original_display_name']}")
+        return "\n".join(lines)
+
+    def handle_policy_question(self, user_input_processed: str) -> Optional[str]:
+        """根据政策关键词返回公告中的相关语句。"""
+        if not self.policy_manager.lines:
+            return None
+
+        for section, keywords in config.POLICY_KEYWORD_MAP.items():
+            if any(k in user_input_processed for k in keywords):
+                excerpt = self.policy_manager.find_policy_excerpt(keywords)
+                if excerpt:
+                    return excerpt
+        # fallback simple search
+        excerpt = self.policy_manager.find_policy_excerpt([user_input_processed])
+        return excerpt if excerpt else None
 
     def _handle_price_or_buy_fallback_recommendation(self, user_input_original: str, user_input_processed: str, identified_query_product_name: Optional[str]) -> Optional[str]:
         """辅助函数：当handle_price_or_buy未找到精确产品时，生成相关的产品推荐。
@@ -715,10 +756,21 @@ class ChatHandler:
             intent_handled = True
             new_context_key = None # Clear context for general query
 
+        elif intent == 'seasonal_list':
+            final_response = self.handle_seasonal_list()
+            intent_handled = True
+            new_context_key = None
+
         elif intent == 'recommendation':
             final_response = self.handle_recommendation(user_input_processed, user_id)
             intent_handled = True
             new_context_key = None # Clear context for new recommendation
+
+        elif intent == 'policy_question':
+            final_response = self.handle_policy_question(user_input_processed)
+            if final_response:
+                intent_handled = True
+                new_context_key = None
 
         elif intent == 'price_or_buy':
             response, handled, ctx_key = self.handle_price_or_buy(user_input_processed, user_input_original, user_id)
