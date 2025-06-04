@@ -9,6 +9,7 @@ import config # 新增：导入配置文件
 from cache_manager import CacheManager
 from product_manager import ProductManager
 from chat_handler import ChatHandler
+from policy_manager import PolicyManager
 
 app = Flask(__name__)
 
@@ -25,13 +26,16 @@ logger.info(" Flask app object created. ") # 修改
 # --- 初始化管理器 ---
 cache_manager = CacheManager()
 product_manager = ProductManager(cache_manager=cache_manager)
+policy_manager = PolicyManager()
 # 加载产品数据 (product_manager 内部会处理缓存)
 if not product_manager.load_product_data():
     logger.error("应用启动失败：无法加载产品数据。请检查 products.csv 文件和配置。")
     # 在这种情况下，应用可能无法正常工作，可以考虑退出或进入维护模式
     # exit(1) # 或者其他错误处理机制
 
-chat_handler = ChatHandler(product_manager=product_manager, cache_manager=cache_manager)
+chat_handler = ChatHandler(product_manager=product_manager,
+                           policy_manager=policy_manager,
+                           cache_manager=cache_manager)
 
 @app.route('/')
 def index():
