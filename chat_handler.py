@@ -185,7 +185,7 @@ class ChatHandler:
         
         # 正则表达式匹配纯数量或数量+单位的输入
         quantity_follow_up_match = re.fullmatch(
-            r'\\s*([\\d一二三四五六七八九十百千万俩两]+)\\s*(份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\\s*(?:呢|呀|啊|吧|多少钱|总共)?\\s*', 
+            r'\s*([\d一二三四五六七八九十百千万俩两]+)\s*(份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*(?:呢|呀|啊|吧|多少钱|总共)?\s*', 
             user_input_processed
         )
         
@@ -672,8 +672,63 @@ class ChatHandler:
                                 relevant_items_for_llm.append(cat_details)
                                 added_product_keys.add(key)
                 
-                # 3. (omitted for brevity - logic for general_keywords, seasonal, popular, random)
-                # This section would be similar to app.py but use self.product_manager methods
+                # 3. 添加基于关键词匹配的产品
+                if len(relevant_items_for_llm) < MAX_LLM_CONTEXT_ITEMS:
+                    # 提取用户查询中的关键词
+                    query_words = set(re.findall(r'[\w\u4e00-\u9fff]+', user_input_processed))
+                    matched_products = []
+                    
+                    # 尝试进行关键词匹配
+                    for key, details in self.product_manager.product_catalog.items():
+                        if key in added_product_keys: continue
+                        
+                        # 检查产品名称和关键词
+                        product_words = set(re.findall(r'[\w\u4e00-\u9fff]+', details['name'].lower()))
+                        product_words.update(details.get('keywords', []))
+                        
+                        # 计算匹配度
+                        intersection = query_words.intersection(product_words)
+                        if intersection:
+                            matched_products.append((key, details, len(intersection)))
+                    
+                    # 按匹配度排序并添加
+                    matched_products.sort(key=lambda x: x[2], reverse=True)
+                    for key, details, _ in matched_products:
+                        if len(relevant_items_for_llm) >= MAX_LLM_CONTEXT_ITEMS: break
+                        relevant_items_for_llm.append(details)
+                        added_product_keys.add(key)
+                
+                # 4. 添加当季产品
+                if len(relevant_items_for_llm) < MAX_LLM_CONTEXT_ITEMS:
+                    seasonal_products = self.product_manager.get_seasonal_products(
+                        limit=MAX_LLM_CONTEXT_ITEMS - len(relevant_items_for_llm), 
+                        category=user_asked_category_name
+                    )
+                    for key, details in seasonal_products:
+                        if key not in added_product_keys:
+                            relevant_items_for_llm.append(details)
+                            added_product_keys.add(key)
+                
+                # 5. 添加热门产品
+                if len(relevant_items_for_llm) < MAX_LLM_CONTEXT_ITEMS:
+                    popular_products = self.product_manager.get_popular_products(
+                        limit=MAX_LLM_CONTEXT_ITEMS - len(relevant_items_for_llm),
+                        category=user_asked_category_name
+                    )
+                    for key, details in popular_products:
+                        if key not in added_product_keys:
+                            relevant_items_for_llm.append(details)
+                            added_product_keys.add(key)
+                
+                # 6. 如果仍然不足，随机添加一些产品
+                if len(relevant_items_for_llm) < MAX_LLM_CONTEXT_ITEMS:
+                    all_keys = list(self.product_manager.product_catalog.keys())
+                    random.shuffle(all_keys)
+                    for key in all_keys:
+                        if len(relevant_items_for_llm) >= MAX_LLM_CONTEXT_ITEMS: break
+                        if key not in added_product_keys:
+                            relevant_items_for_llm.append(self.product_manager.product_catalog[key])
+                            added_product_keys.add(key)
 
                 if relevant_items_for_llm:
                     context_for_llm += "\n\n作为参考，这是我们目前的部分相关产品列表和价格（价格单位以实际规格为准）：\n"

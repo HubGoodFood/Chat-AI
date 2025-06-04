@@ -285,15 +285,31 @@ class ProductManager:
         direct_matches = []
         partial_matches = []
         
+        # 0. 检查是否有完全匹配的产品名称
+        for key, details in self.product_catalog.items():
+            product_name = details['name'].lower()
+            # 完全匹配
+            if query_lower == product_name or query_lower == key:
+                return [(key, 1.0)]  # 完全匹配，直接返回
+        
         # 1. 尝试直接匹配产品名或catalog_key
         for key, details in self.product_catalog.items():
-            if query_lower == key or query_lower == details['name'].lower() or \
-               query_lower in key or query_lower in details['name'].lower() or \
-               key in query_lower or details['name'].lower() in query_lower:
-                direct_matches.append((key, 1.0))  # 完全或高度相关匹配，相似度为1
+            product_name = details['name'].lower()
+            # 部分匹配 - 查询是产品名的一部分，或产品名是查询的一部分
+            if query_lower in product_name or product_name in query_lower:
+                # 计算匹配度 - 匹配的字符占比
+                match_ratio = len(query_lower) / len(product_name) if len(product_name) > 0 else 0
+                direct_matches.append((key, max(0.8, match_ratio)))  # 至少0.8的相似度
+            
+            # 检查产品的关键词
+            for keyword in details.get('keywords', []):
+                if keyword.lower() in query_lower or query_lower in keyword.lower():
+                    direct_matches.append((key, 0.75))  # 关键词匹配
+                    break
 
         if direct_matches:
-            direct_matches.sort(key=lambda x: len(x[0]), reverse=True)
+            # 按相似度和产品名长度排序
+            direct_matches.sort(key=lambda x: (x[1], len(self.product_catalog[x[0]]['name'])), reverse=True)
             return direct_matches
 
         # 2. 尝试关键词部分匹配 (Jaccard相似度)
@@ -302,28 +318,40 @@ class ProductManager:
             return []
 
         for key, details in self.product_catalog.items():
-            product_name_words = set(self._tokenize(details['name'].lower()))
+            product_name = details['name'].lower()
+            product_name_words = set(self._tokenize(product_name))
             product_key_words = set(self._tokenize(key))
             keywords_words = set()
             for kw in details.get('keywords', []):
-                keywords_words.update(self._tokenize(kw))
+                keywords_words.update(self._tokenize(kw.lower()))
 
-            # 名称和key的Jaccard相似度
+            # 计算各种相似度
+            # 名称的Jaccard相似度
             intersection_name = query_words.intersection(product_name_words)
             union_name = query_words.union(product_name_words)
             similarity_name = len(intersection_name) / len(union_name) if union_name else 0
 
-            intersection_key = query_words.intersection(product_key_words)
-            union_key = query_words.union(product_key_words)
-            similarity_key = len(intersection_key) / len(union_key) if union_key else 0
-
-            # 关键词Jaccard相似度
+            # 关键词的Jaccard相似度
             intersection_kw = query_words.intersection(keywords_words)
             union_kw = query_words.union(keywords_words)
             similarity_kw = len(intersection_kw) / len(union_kw) if union_kw else 0
 
-            # 取较高的相似度
-            similarity = max(similarity_name, similarity_key, similarity_kw)
+            # 计算字符级别的相似度 (对中文更友好)
+            chars_query = set(query_lower)
+            chars_product = set(product_name)
+            intersection_chars = chars_query.intersection(chars_product)
+            similarity_chars = len(intersection_chars) / max(len(chars_query), len(chars_product)) if chars_product else 0
+
+            # 取较高的相似度，但给予字符级别相似度更高的权重
+            similarity = max(
+                similarity_name,
+                similarity_kw,
+                similarity_chars * 1.2  # 提高字符级别相似度的权重
+            )
+
+            # 特殊处理：如果查询中包含产品名的全部字符，给予额外加分
+            if all(char in chars_product for char in chars_query) and len(chars_query) > 1:
+                similarity = max(similarity, 0.7)  # 至少0.7的相似度
 
             if similarity >= threshold:
                 partial_matches.append((key, similarity))
@@ -341,9 +369,19 @@ class ProductManager:
         Returns:
             str or None: 推断出的类别名称，如果无法确定则返回None
         """
+        if not query_text:
+            return None
+            
         query_lower = query_text.lower()
+        
+        # 0. 首先尝试直接匹配产品名，如果找到产品，直接返回其类别
+        for key, details in self.product_catalog.items():
+            product_name = details['name'].lower()
+            if product_name in query_lower or query_lower in product_name:
+                logger.debug(f"通过产品名匹配识别到类别: {details['category']} (产品: {product_name})")
+                return details['category']
 
-        # 检查关键词是否在查询中
+        # 1. 检查水果和蔬菜特定关键词
         for keyword in config.FRUIT_KEYWORDS:
             if keyword in query_lower:
                 logger.debug(f"通过水果关键词识别到产品类别: 水果 (关键词: {keyword})")
@@ -354,29 +392,61 @@ class ProductManager:
                 logger.debug(f"通过蔬菜关键词识别到产品类别: 蔬菜 (关键词: {keyword})")
                 return "蔬菜"
 
-        # 1. 直接在查询中查找类别名称
+        # 2. 直接在查询中查找类别名称
         for category_name in self.product_categories.keys():
             if category_name.lower() in query_lower:
+                logger.debug(f"通过类别名直接匹配: {category_name}")
                 return category_name
 
-        # 2. 检查类别关键词
+        # 3. 检查类别关键词映射
         category_scores = {}
         for cat, keywords_list in config.CATEGORY_KEYWORD_MAP.items():
             score = 0
+            matched_keywords = []
             for keyword in keywords_list:
                 if keyword in query_lower:
                     score += 1
+                    matched_keywords.append(keyword)
             if score > 0:
-                category_scores[cat] = score
+                category_scores[cat] = {
+                    'score': score,
+                    'keywords': matched_keywords
+                }
 
         if category_scores:
-            return max(category_scores.items(), key=lambda x: x[1])[0]
+            best_category = max(category_scores.items(), key=lambda x: x[1]['score'])
+            logger.debug(f"通过关键词映射识别类别: {best_category[0]} (匹配关键词: {', '.join(best_category[1]['keywords'])})")
+            return best_category[0]
 
-        # 3. 基于通用词汇进行猜测
-        if any(word in query_lower for word in ["吃", "食", "鲜", "甜", "新鲜", "水果"]):
+        # 4. 使用模糊匹配查找产品，然后返回其类别
+        fuzzy_matches = self.fuzzy_match_product(query_lower, threshold=0.5)
+        if fuzzy_matches:
+            top_match_key = fuzzy_matches[0][0]
+            category = self.product_catalog[top_match_key]['category']
+            logger.debug(f"通过产品模糊匹配识别类别: {category} (匹配产品: {self.product_catalog[top_match_key]['name']})")
+            return category
+
+        # 5. 基于通用词汇进行猜测
+        if any(word in query_lower for word in ["吃", "食", "鲜", "甜", "新鲜", "水果", "果"]):
+            logger.debug(f"通过通用词汇猜测类别: 水果")
             return "水果"
-        if any(word in query_lower for word in ["菜", "素", "绿色", "蔬菜"]):
+        if any(word in query_lower for word in ["菜", "素", "绿色", "蔬菜", "青菜"]):
+            logger.debug(f"通过通用词汇猜测类别: 蔬菜")
             return "蔬菜"
+
+        # 6. 分析查询中的字符，检查与类别名称的重叠
+        query_chars = set(query_lower)
+        category_char_scores = {}
+        for category_name in self.product_categories.keys():
+            category_chars = set(category_name.lower())
+            overlap = len(query_chars.intersection(category_chars))
+            if overlap > 0:
+                category_char_scores[category_name] = overlap
+        
+        if category_char_scores:
+            best_category = max(category_char_scores.items(), key=lambda x: x[1])
+            logger.debug(f"通过字符重叠分析识别类别: {best_category[0]} (重叠字符数: {best_category[1]})")
+            return best_category[0]
 
         return None
 
