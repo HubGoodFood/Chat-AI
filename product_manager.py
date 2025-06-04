@@ -156,7 +156,12 @@ class ProductManager:
             return True
 
     def _tokenize(self, text):
-        """Tokenize text into alphanumeric words and Chinese characters/bigrams"""
+        """Return a list of tokens split for fuzzy matching.
+
+        Alphanumeric text is separated using ``\\w+`` while consecutive
+        Chinese characters are broken into single characters and
+        overlapping two-character groups so partial queries still match.
+        """
         text = text.lower()
         tokens = re.findall(r'[A-Za-z0-9]+', text)
         for seq in re.findall(r'[\u4e00-\u9fff]+', text):
@@ -276,14 +281,18 @@ class ProductManager:
     
     @cached(ttl_seconds=600)
     def fuzzy_match_product(self, query_text, threshold=config.FUZZY_MATCH_THRESHOLD):
-        """使用直接匹配和Jaccard相似度进行产品名称的模糊匹配
-        
+        """模糊匹配用户查询与产品名称。
+
+        The function first tries exact matches. Otherwise it tokenizes the
+        query, product names, catalog keys and custom keywords using
+        :meth:`_tokenize` and calculates Jaccard similarity.
+
         Args:
             query_text (str): 用户输入的查询文本
-            threshold (float): Jaccard相似度的阈值
-            
+            threshold (float): Jaccard 相似度阈值
+
         Returns:
-            list: 包含元组 (product_key, similarity_score) 的列表，按相似度降序排列
+            list: (product_key, similarity_score) 元组列表，按相似度降序排列
         """
         query_lower = query_text.lower()
         direct_matches = []
