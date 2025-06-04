@@ -76,17 +76,21 @@ class ChatHandler:
                 'last_product_key': None,
                 'last_product_details': None,
                 'context': {},
-                'history': []
+                'history': [],
+                'preferences': {
+                    'categories': [],  # 用户偏好的产品类别
+                    'products': []      # 用户偏好的具体产品
+                }
             }
         return self.user_sessions[user_id]
         
-    def update_user_session(self, user_id: str, 
+    def update_user_session(self, user_id: str,
                           query: str = None,
                           product_key: str = None,
                           product_details: Dict = None,
                           context_updates: Dict = None) -> None:
         """更新用户会话数据
-        
+
         Args:
             user_id (str): 用户ID
             query (str, optional): 用户查询
@@ -95,18 +99,29 @@ class ChatHandler:
             context_updates (dict, optional): 上下文更新
         """
         session = self.get_user_session(user_id)
-        
+
         if query is not None:
             session['last_query'] = query
             session['history'].append(query)
-            
+
         if product_key is not None:
             session['last_product_key'] = product_key
             session['last_product_details'] = product_details
-            
+
         if context_updates:
             session['context'].update(context_updates)
-            
+
+        # 更新用户偏好
+        if product_key and product_details:
+            category = product_details.get('category')
+            if category:
+                if category not in session['preferences']['categories']:
+                    session['preferences']['categories'].append(category)
+                    logger.debug(f"User {user_id} added category '{category}' to preferences.")
+            if product_key not in session['preferences']['products']:
+                session['preferences']['products'].append(product_key)
+                logger.debug(f"User {user_id} added product '{product_key}' to preferences.")
+
         # 更新缓存
         self.cache_manager.set_user_session(user_id, session)
         
@@ -199,7 +214,15 @@ class ChatHandler:
         if (any(keyword in user_input_processed for keyword in config.PRICE_QUERY_KEYWORDS) or
             any(keyword in user_input_processed for keyword in config.BUY_INTENT_KEYWORDS)):
             return 'price_or_buy'
-            
+        
+        # 如果输入中直接包含可匹配的产品名称或关键词，也视为价格查询
+        try:
+            fuzzy = self.product_manager.fuzzy_match_product(user_input_processed)
+            if fuzzy:
+                return 'price_or_buy'
+        except Exception:
+            pass
+        
         return 'unknown' 
         
     def handle_quantity_follow_up(self, user_input_processed: str, user_id: str) -> Optional[str]:
@@ -397,18 +420,41 @@ class ChatHandler:
         return "\n".join(response_parts)
 
     def handle_policy_question(self, user_input_processed: str) -> Optional[str]:
-        """根据政策关键词返回公告中的相关语句。"""
-        if not self.policy_manager.lines:
-            return None
+        """根据用户输入，使用语义搜索返回相关的政策语句。"""
+        if not self.policy_manager or not self.policy_manager.model:
+            logger.warning("PolicyManager or semantic model not available for policy question.")
+            # Fallback to LLM if PolicyManager is not properly initialized
+            return None # Let LLM handle it
 
-        for section, keywords in config.POLICY_KEYWORD_MAP.items():
-            if any(k in user_input_processed for k in keywords):
-                excerpt = self.policy_manager.find_policy_excerpt(keywords)
-                if excerpt:
-                    return excerpt
-        # fallback simple search
-        excerpt = self.policy_manager.find_policy_excerpt([user_input_processed])
-        return excerpt if excerpt else None
+        try:
+            # 使用语义搜索查找最相关的政策句子
+            relevant_sentences = self.policy_manager.find_policy_excerpt_semantic(user_input_processed, top_k=3)
+
+            if relevant_sentences:
+                # 将找到的句子格式化为回复
+                response_parts = ["关于您的政策问题，以下信息可能对您有帮助："]
+                for sentence in relevant_sentences:
+                    response_parts.append(f"- {sentence}")
+                
+                # 可选：添加政策版本和更新日期
+                version = self.policy_manager.get_policy_version()
+                last_updated = self.policy_manager.get_policy_last_updated()
+                response_parts.append(f"\n(政策版本: {version}, 最后更新: {last_updated})")
+
+                return "\n".join(response_parts)
+            else:
+                # 如果语义搜索没有找到相关句子，可以尝试关键词搜索作为备用
+                keyword_excerpt = self.policy_manager.find_policy_excerpt([user_input_processed])
+                if keyword_excerpt:
+                     return f"关于您的政策问题，以下信息可能对您有帮助：\n- {keyword_excerpt}"
+                else:
+                    # 如果关键词搜索也失败，返回None让LLM处理
+                    return None
+
+        except Exception as e:
+            logger.error(f"Error handling policy question with semantic search: {e}")
+            # 如果发生异常，返回None让LLM处理
+            return None
 
     def _handle_price_or_buy_fallback_recommendation(self, user_input_original: str, user_input_processed: str, identified_query_product_name: Optional[str]) -> Optional[str]:
         """辅助函数：当handle_price_or_buy未找到精确产品时，生成相关的产品推荐。
@@ -467,13 +513,44 @@ class ChatHandler:
         if recommendation_items:
             query_desc = f"'{identified_query_product_name if identified_query_product_name else user_input_original}'" \
                          if (identified_query_product_name or user_input_original) else "您查询的产品"
-            response_str = f"抱歉，我们目前没有找到完全匹配 {query_desc} 的产品。不过，您可能对以下商品感兴趣：\n\n"
+            
+            recommendations_text_list = []
             for key, details, tag in recommendation_items[:MAX_RECOMMENDATIONS]: # 确保不超过最大推荐数
-                response_str += f"- {self.product_manager.format_product_display(details, tag=tag)}\n"
-            response_str += "\n您对哪个感兴趣，想了解更多，还是需要其他推荐？"
+                recommendations_text_list.append(f"- {self.product_manager.format_product_display(details, tag=tag)}")
+            recommendations_list_str = "\n".join(recommendations_text_list)
+
+            response_str = (
+                f"您好！您提到的'{query_desc}'我们暂时没有完全一样的呢。不过，这里有几款相似或店里很受欢迎的产品，"
+                f"您可以看看喜不喜欢：\n\n{recommendations_list_str}\n\n"
+                f"这些里面有您中意的吗？或者，如果您能告诉我您更偏好哪种口味、品类或者有什么特定需求，"
+                f"我非常乐意再帮您精心挑选一下！"
+            )
             return response_str
-        # 如果没有任何推荐，返回"产品不存在"的提示
-        return f"抱歉，我们暂时没有'{user_input_original}'这款产品。您可以问我其他产品，或者让我为您推荐同类商品。"
+        else:
+            # 如果没有任何推荐，返回引导性提示
+            # 动态获取一些品类作为示例
+            category_examples = []
+            if self.product_manager and self.product_manager.product_categories:
+                all_categories = list(self.product_manager.product_categories.keys())
+                if len(all_categories) > 0:
+                    random.shuffle(all_categories) # 随机打乱
+                    # 取前3个或所有（如果不足3个）
+                    example_count = min(3, len(all_categories))
+                    category_examples = [f"【{cat}】" for cat in all_categories[:example_count]]
+            
+            if category_examples:
+                examples_str = "、".join(category_examples)
+                return (
+                    f"哎呀，真不好意思，您提到的'{user_input_original}'我们店里暂时还没有呢。要不您看看我们其他的分类？"
+                    f"比如我们有新鲜的{examples_str}都很受欢迎。"
+                    f"您对哪个品类感兴趣，或者想找点什么特定口味的吗？告诉我您的想法，我来帮您参谋参谋！"
+                )
+            else: # 如果连品类都没有，给出更通用的提示
+                return (
+                    f"哎呀，真不好意思，您提到的'{user_input_original}'我们店里暂时还没有呢。"
+                    f"您可以告诉我您想找的是哪一类产品吗？比如是水果、蔬菜，还是其他特定的东西？"
+                    f"或者您对产品的口味、产地有什么偏好吗？这样我也许能帮您找到合适的替代品。"
+                )
 
     def handle_price_or_buy(self, user_input_processed: str, user_input_original: str, user_id: str) -> Tuple[Optional[str], bool, Optional[str]]:
         """处理用户的价格查询或购买意图。
@@ -678,21 +755,22 @@ class ChatHandler:
         if not config.llm_client: # llm_client 现在从 config 模块获取
             logger.warning("LLM client is not available. Skipping LLM fallback.")
             return "抱歉，我现在无法深入理解您的问题，AI助手服务暂未连接。"
-
         try:
             system_prompt = (
                 "你是一位专业的生鲜产品客服。你的回答应该友好、自然且专业。"
-                "主要任务是根据顾客的询问，结合我提供的产品列表（如果本次对话提供了的话）来回答问题。"
+                "请尽量让对话像和真人聊天一样自然、流畅。主要任务是根据顾客的询问，结合我提供的产品列表（如果本次对话提供了的话）来回答问题。"
                 "1. 当被问及我们有什么产品、特定类别的产品（如水果、时令水果、蔬菜等）或推荐时，你必须首先且主要参考我提供给你的产品列表上下文。请从该列表中选择相关的产品进行回答。"
                 "2. 如果产品列表上下文中没有用户明确询问的产品，请礼貌地告知，例如：'抱歉，您提到的XX我们目前可能没有，不过我们有这些相关的产品：[列举列表中的1-2个相关产品]'。不要虚构我们没有的产品。"
                 "3. 如果用户只是打招呼（如'你好'），请友好回应。"
                 "4. 对于算账和精确价格查询，我会尽量自己处理。如果我处理不了，或者你需要补充信息，请基于我提供的产品列表（如果有）进行回答。"
-                "5. 避免使用过于程序化或模板化的AI语言。"
+                "5. 避免使用过于程序化或模板化的AI语言。请注意变换您的句式和表达方式，避免多次使用相同的开头或结尾，让顾客感觉像在和机器人对话。"
                 "6. 专注于水果、蔬菜及相关生鲜产品。如果用户询问完全无关的话题，请委婉地引导回我们的产品和服务。"
                 "7. 推荐产品时，请着重突出当季新鲜产品，并尽量提供产品特点、口感或用途等信息，让推荐更有说服力。"
                 "8. 如果用户询问某个特定类别的产品，请专注于提供该类别的产品信息，并根据产品描述给出个性化建议。"
                 "9. 如果用户提到'刚才'、'刚刚'等词，请注意可能是在询问上一个提到的产品。"
                 "10. 如果上文提到过某个产品 (session['last_product_details']), 而当前用户问题不清晰，可以优先考虑与该产品相关。"
+                "11. (新增) 如果顾客的问题不是很明确（例如只说‘随便看看’或者‘有什么好的’），请主动提问来澄清他们的需求，比如询问他们偏好的品类（水果、蔬菜等）、口味（甜的、酸的）、或者用途（自己吃、送礼等）。"
+                "12. (新增) 当顾客遇到问题或者对某些信息不满意时，请表现出同理心，并积极尝试帮助他们解决问题或找到替代方案。在对话中，可以适当运用一些亲和的语气词，但避免过度使用表情符号。"
             )
             messages = [{"role": "system", "content": system_prompt}]
             
@@ -702,8 +780,8 @@ class ChatHandler:
 
             if self.product_manager.product_catalog:
                 relevant_items_for_llm = []
-                added_product_keys = set() 
-                MAX_LLM_CONTEXT_ITEMS = 7 
+                added_product_keys = set()
+                MAX_LLM_CONTEXT_ITEMS = 7
 
                 # 1. 优先添加与上一个产品同类别的产品
                 if session['last_product_details'] and len(relevant_items_for_llm) < MAX_LLM_CONTEXT_ITEMS:
@@ -719,7 +797,7 @@ class ChatHandler:
                                     added_product_keys.add(key)
                 
                 # 2. 基于用户查询中识别的类别添加产品
-                user_asked_category_name = self.product_manager.find_related_category(user_input) 
+                user_asked_category_name = self.product_manager.find_related_category(user_input)
                 if user_asked_category_name and len(relevant_items_for_llm) < MAX_LLM_CONTEXT_ITEMS:
                     for key, cat_details in self.product_manager.product_catalog.items():
                         if len(relevant_items_for_llm) >= MAX_LLM_CONTEXT_ITEMS: break
@@ -757,7 +835,7 @@ class ChatHandler:
                 # 4. 添加当季产品
                 if len(relevant_items_for_llm) < MAX_LLM_CONTEXT_ITEMS:
                     seasonal_products = self.product_manager.get_seasonal_products(
-                        limit=MAX_LLM_CONTEXT_ITEMS - len(relevant_items_for_llm), 
+                        limit=MAX_LLM_CONTEXT_ITEMS - len(relevant_items_for_llm),
                         category=user_asked_category_name
                     )
                     for key, details in seasonal_products:
@@ -788,17 +866,17 @@ class ChatHandler:
 
                 if relevant_items_for_llm:
                     context_for_llm += "\n\n作为参考，这是我们目前的部分相关产品列表和价格（价格单位以实际规格为准）：\n"
-                    for i, details in enumerate(relevant_items_for_llm[:MAX_LLM_CONTEXT_ITEMS]): 
+                    for i, details in enumerate(relevant_items_for_llm[:MAX_LLM_CONTEXT_ITEMS]):
                         context_for_llm += f"- {self.product_manager.format_product_display(details)}\n"
             
             messages.append({"role": "system", "content": "产品参考信息：" + context_for_llm})
             messages.append({"role": "user", "content": user_input})
                 
             chat_completion = config.llm_client.chat.completions.create(
-                model=config.LLM_MODEL_NAME, 
+                model=config.LLM_MODEL_NAME,
                 messages=messages,
-                max_tokens=config.LLM_MAX_TOKENS, 
-                temperature=config.LLM_TEMPERATURE 
+                max_tokens=config.LLM_MAX_TOKENS,
+                temperature=config.LLM_TEMPERATURE
             )
             if chat_completion.choices and chat_completion.choices[0].message and chat_completion.choices[0].message.content:
                 final_response = chat_completion.choices[0].message.content.strip()
@@ -807,7 +885,7 @@ class ChatHandler:
             else:
                 final_response = "抱歉，AI助手暂时无法给出回复，请稍后再试。"
         except Exception as e:
-            logger.error(f"调用 LLM API 失败: {e}") 
+            logger.error(f"调用 LLM API 失败: {e}")
             final_response = "抱歉，AI助手暂时遇到问题，请稍后再试。"
         
         return final_response

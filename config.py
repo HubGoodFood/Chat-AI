@@ -7,7 +7,7 @@ load_dotenv()
 FUZZY_MATCH_THRESHOLD = 0.6
 
 # --- 意图关键词 --- 
-BUY_INTENT_KEYWORDS = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只"]
+BUY_INTENT_KEYWORDS = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只", "卖"]
 PRICE_QUERY_KEYWORDS = ["多少钱", "价格是", "什么价", "价钱"]
 WHAT_DO_YOU_SELL_KEYWORDS = ["卖什么", "有什么产品", "商品列表", "菜单", "有哪些东西", "有什么卖"]
 RECOMMEND_KEYWORDS = ["推荐", "介绍点", "什么好吃", "什么值得买", "有什么好", "当季", "新鲜"]

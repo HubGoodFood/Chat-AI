@@ -31,8 +31,10 @@ class ProductManager:
     def load_product_data(self, file_path=config.PRODUCT_DATA_FILE):
         """从CSV文件加载产品数据
         
-        CSV文件应包含列: ProductName, Specification, Price, Unit, Category, 
-                       Description (optional), IsSeasonal (optional, true/false/1/0/yes/no).
+        CSV文件应包含列: ProductName, Specification, Price, Unit, Category,
+                       Description (optional), IsSeasonal (optional, true/false/1/0/yes/no),
+                       Keywords (optional), Taste (optional), Origin (optional),
+                       Benefits (optional), SuitableFor (optional).
         
         Args:
             file_path (str, optional): 产品数据CSV文件的路径
@@ -57,22 +59,29 @@ class ProductManager:
         
         self.product_catalog = {} 
         self.product_categories = {} 
-        self.all_product_keywords = [] 
+        self.all_product_keywords = []
         self.seasonal_products = []
-        expected_headers = ['ProductName', 'Specification', 'Price', 'Unit', 'Category', 'Description', 'IsSeasonal', 'Keywords']
+        expected_headers = ['ProductName', 'Specification', 'Price', 'Unit', 'Category', 'Description', 'IsSeasonal', 'Keywords', 'Taste', 'Origin', 'Benefits', 'SuitableFor'] # 保持与文档一致
         
         try:
-            with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile: 
+            with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile:
                 reader = csv.DictReader(csvfile)
                 logger.debug(f"CSV Headers read by DictReader: {reader.fieldnames}")
                 
                 # 检查是否有必要的列
-                has_description = 'Description' in (reader.fieldnames or [])
-                has_seasonal = 'IsSeasonal' in (reader.fieldnames or [])
-                has_keywords = 'Keywords' in (reader.fieldnames or [])
+                fieldnames_lower = [fn.lower() for fn in (reader.fieldnames or [])]
+                has_description = 'description' in fieldnames_lower
+                has_seasonal = 'isseasonal' in fieldnames_lower
+                has_keywords = 'keywords' in fieldnames_lower
+                has_taste = 'taste' in fieldnames_lower
+                has_origin = 'origin' in fieldnames_lower
+                has_benefits = 'benefits' in fieldnames_lower
+                has_suitablefor = 'suitablefor' in fieldnames_lower
                 
-                if not reader.fieldnames or not all(col in reader.fieldnames for col in ['ProductName', 'Specification', 'Price', 'Unit', 'Category']):
-                    logger.error(f"CSV文件 {file_path} 的基本列标题不正确。必须包含: ProductName, Specification, Price, Unit, Category")
+                # Ensure basic columns are present, checking against lowercased fieldnames for robustness
+                required_cols_lower = ['productname', 'specification', 'price', 'unit', 'category']
+                if not reader.fieldnames or not all(col_req.lower() in fieldnames_lower for col_req in required_cols_lower):
+                    logger.error(f"CSV文件 {file_path} 的基本列标题不正确。必须包含: ProductName, Specification, Price, Unit, Category (大小写不敏感)")
                     return False
                 
                 for row_num, row in enumerate(reader, 1): 
@@ -83,10 +92,17 @@ class ProductManager:
                         unit = row['Unit'].strip()
                         category = row['Category'].strip()
                         # 读取可选列
-                        description = row.get('Description', '').strip() if has_description else ""
-                        is_seasonal = row.get('IsSeasonal', '').strip().lower() in ['true', 'yes', '1', 'y'] if has_seasonal else False
-                        keywords_text = row.get('Keywords', '').strip() if has_keywords else ""
+                        description = row.get('Description', row.get('description', '')).strip() if has_description else ""
+                        is_seasonal_str = row.get('IsSeasonal', row.get('isseasonal', '')).strip().lower()
+                        is_seasonal = is_seasonal_str in ['true', 'yes', '1', 'y'] if has_seasonal else False
+                        keywords_text = row.get('Keywords', row.get('keywords', '')).strip() if has_keywords else ""
                         keywords = [k.lower() for k in re.split(r'[;,\s]+', keywords_text) if k.strip()]
+                        
+                        # 新增: 读取多维度标签
+                        taste = row.get('Taste', row.get('taste', '')).strip() if has_taste else ""
+                        origin = row.get('Origin', row.get('origin', '')).strip() if has_origin else ""
+                        benefits = row.get('Benefits', row.get('benefits', '')).strip() if has_benefits else ""
+                        suitablefor = row.get('SuitableFor', row.get('suitablefor', '')).strip() if has_suitablefor else ""
 
                         if not product_name or not price_str or not specification or not unit or not category:
                             logger.warning(f"CSV文件第 {row_num+1} 行数据不完整，已跳过: {row}")
@@ -98,16 +114,21 @@ class ProductManager:
                             unique_product_key = f"{product_name} ({specification})"
                         
                         self.product_catalog[unique_product_key.lower()] = {
-                            'name': product_name, 
-                            'specification': specification, 
-                            'price': price, 
-                            'unit': unit, 
+                            'name': product_name,
+                            'specification': specification,
+                            'price': price,
+                            'unit': unit,
                             'category': category,
                             'original_display_name': unique_product_key,
                             'description': description,
                             'is_seasonal': is_seasonal,
                             'keywords': keywords,
-                            'popularity': 0
+                            'popularity': 0,
+                            # 新增: 存储多维度标签
+                            'taste': taste,
+                            'origin': origin,
+                            'benefits': benefits,
+                            'suitablefor': suitablefor
                         }
                         
                         # 记录季节性产品
