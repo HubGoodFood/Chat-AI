@@ -1,5 +1,7 @@
 # config.py
 import os
+from dotenv import load_dotenv  # 加载 .env 文件中的环境变量
+load_dotenv()
 
 # --- 模糊匹配配置 ---
 FUZZY_MATCH_THRESHOLD = 0.6
