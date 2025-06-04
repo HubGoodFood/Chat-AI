@@ -143,6 +143,9 @@ class ChatHandler:
             str: 意图类型 ('quantity_follow_up', 'what_do_you_sell',
                          'recommendation', 'price_or_buy', 'policy_question', 'unknown')
         """
+        # 检查是否是追问推荐的意图（如"其他"、"还有"）
+        if any(k in user_input_processed for k in ["其他", "还有"]):
+            return 'recommendation_follow_up'
         # 检查是否是纯数量追问
         quantity_pattern = r'^\s*([\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*(?:呢|呀|啊|吧|多少钱|总共)?\s*$'
         if re.match(quantity_pattern, user_input_processed):
@@ -417,7 +420,8 @@ class ChatHandler:
                 response_str += f"- {self.product_manager.format_product_display(details, tag=tag)}\n"
             response_str += "\n您对哪个感兴趣，想了解更多，还是需要其他推荐？"
             return response_str
-        return None
+        # 如果没有任何推荐，返回"产品不存在"的提示
+        return f"抱歉，我们暂时没有“{user_input_original}”这款产品。您可以问我其他产品，或者让我为您推荐同类商品。"
 
     def handle_price_or_buy(self, user_input_processed: str, user_input_original: str, user_id: str) -> Tuple[Optional[str], bool, Optional[str]]:
         """处理用户的价格查询或购买意图。

@@ -251,6 +251,14 @@ class ProductManager:
         Returns:
             list: 元组 (product_key, product_details) 的列表
         """
+        # 如果用户指定了"时令水果"类别，返回该类别下所有产品
+        if category and category == "时令水果":
+            products = []
+            for key in self.product_categories.get(category, []):
+                if key in self.product_catalog:
+                    products.append((key, self.product_catalog[key]))
+            return products[:limit]
+
         products = []
         for key in self.seasonal_products:
             if key in self.product_catalog:
