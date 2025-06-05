@@ -363,23 +363,49 @@ class ProductManager:
         # 1. 尝试直接包含匹配 (产品名、关键词)
         for key, details in self.product_catalog.items():
             product_name_lower = details['name'].lower()
-            # 查询是产品名的一部分，或产品名是查询的一部分
-            if query_lower in product_name_lower or product_name_lower in query_lower:
-                match_ratio = len(query_lower) / len(product_name_lower) if len(product_name_lower) > 0 else 0
-                # 使用max(0.8, match_ratio)可能过高，调整为更依赖实际重叠比例，但给予一个基础分
-                direct_matches.append((key, 0.7 + 0.2 * match_ratio)) # 基础0.7，根据重叠比例增加
             
-            for keyword in details.get('keywords', []):
-                if keyword.lower() in query_lower or query_lower in keyword.lower():
-                    direct_matches.append((key, 0.72)) # 关键词直接包含匹配，给一个稍高的固定分
-                    break
+            # Case 1: 用户查询是产品名的一部分 (e.g., "芭乐" in "红心芭乐")
+            # 使用 config.MIN_SUBSTRING_MATCH_LENGTH (假设已在 config.py 定义, e.g., 2)
+            if query_lower in product_name_lower and len(query_lower) >= config.MIN_SUBSTRING_MATCH_LENGTH:
+                overlap_ratio = len(query_lower) / len(product_name_lower) if len(product_name_lower) > 0 else 0
+                score = 0.85 + 0.1 * overlap_ratio
+                direct_matches.append((key, min(score, 0.95)))
+                logger.debug(f"Direct match (query in product_name): query='{query_lower}', product='{product_name_lower}', score={min(score,0.95)}")
+                # 如果已经通过这种方式高分匹配，可以考虑将其作为强信号，但仍允许其他匹配类型
+            
+            # Case 2: 产品名是用户查询的一部分 (e.g., "苹果" in "苹果多少钱")
+            # 使用 config.MIN_PRODUCT_NAME_IN_QUERY_LENGTH (假设已在 config.py 定义, e.g., 2)
+            # 确保不与 Case 1 重复添加同一个 key 的匹配（如果 query_lower == product_name_lower）
+            # 通过 elif 避免，或者在添加前检查 key 是否已在 direct_matches 中
+            elif product_name_lower in query_lower and len(product_name_lower) >= config.MIN_PRODUCT_NAME_IN_QUERY_LENGTH:
+                # 检查是否已因 Case 1 添加，避免重复或低分覆盖高分
+                is_already_added_by_case1 = any(dm_key == key for dm_key, _ in direct_matches)
+                if not is_already_added_by_case1:
+                    direct_matches.append((key, 0.92))
+                    logger.debug(f"Direct match (product_name in query): product='{product_name_lower}', query='{query_lower}', score=0.92")
+
+            # Case 3: 关键词匹配
+            # 确保一个产品只因关键词匹配添加一次，即使匹配多个关键词
+            # 并且，如果已因产品名包含而高分匹配，关键词匹配的得分不应覆盖它，除非更高
+            matched_by_keyword_already = any(dm_key == key for dm_key, _ in direct_matches) # 简化：如果已添加，后续关键词不重复添加key
+            
+            if not matched_by_keyword_already:
+                for keyword in details.get('keywords', []):
+                    keyword_lower = keyword.lower()
+                    if keyword_lower in query_lower or query_lower in keyword_lower:
+                        kw_score = 0.80
+                        if query_lower == keyword_lower:
+                            kw_score = 0.88
+                        direct_matches.append((key, kw_score))
+                        logger.debug(f"Direct match (keyword): query/keyword='{query_lower}'/'{keyword_lower}', product_key='{key}', score={kw_score}")
+                        break # 一个产品匹配到一个关键词即可
         
         # 如果有直接匹配结果，优先返回得分较高的
-        if direct_matches:
-            direct_matches.sort(key=lambda x: x[1], reverse=True)
-            # 如果最高分已经很高（例如 > 0.85），可以考虑直接返回，减少后续计算
-            if direct_matches[0][1] > 0.85:
-                 return direct_matches[:3] # 返回前几个高分匹配
+        # 但不要在这里过早 return，允许后续模糊匹配补充或提升分数
+        # if direct_matches:
+        #     direct_matches.sort(key=lambda x: x[1], reverse=True)
+        #     if direct_matches[0][1] > 0.85: # 这个阈值可以调整或移除，让后续逻辑统一处理
+        #          # return direct_matches[:3] # 暂时注释掉这个提前返回
 
         # 2. 综合多种模糊匹配策略
         query_words = set(self._tokenize(query_lower))
@@ -486,7 +512,7 @@ class ProductManager:
                 final_matches_dict[key] = score
         
         sorted_matches = sorted(final_matches_dict.items(), key=lambda item: item[1], reverse=True)
-        return partial_matches
+        return sorted_matches
     
     def find_related_category(self, query_text):
         """根据用户查询文本尝试推断相关的产品类别
@@ -629,3 +655,44 @@ class ProductManager:
             return tens * 10 + ones
 
         return 1
+
+    def find_similar_products(self, query_string: str, threshold: float = 0.7):
+        """
+        根据查询字符串查找相似的产品。
+        利用 fuzzy_match_product 进行更稳健的匹配。
+
+        Args:
+            query_string (str): 用户的模糊查询字符串。
+            threshold (float): 相似度阈值，传递给 fuzzy_match_product。
+
+        Returns:
+            list: 包含相似产品显示名称的列表。
+        """
+        similar_product_names = []
+        if not query_string or not self.product_catalog:
+            logger.debug("find_similar_products: 空查询或空产品目录，返回空列表。")
+            return similar_product_names
+
+        logger.debug(f"find_similar_products: 查询='{query_string}', 阈值={threshold}")
+
+        # 调用现有的更复杂的模糊匹配函数
+        # fuzzy_match_product 返回 (product_key, score) 列表，已按score排序
+        # 并且其内部已使用 threshold 过滤 (基于其参数 threshold)
+        matched_products_with_scores = self.fuzzy_match_product(query_text=query_string, threshold=threshold)
+        
+        logger.debug(f"find_similar_products: fuzzy_match_product 返回 {len(matched_products_with_scores)} 个匹配项: {matched_products_with_scores}")
+
+        for product_key, score in matched_products_with_scores:
+            # fuzzy_match_product 内部已经根据其 threshold 参数进行了筛选。
+            # 此处的 threshold (find_similar_products的参数) 已传递给 fuzzy_match_product。
+            product_details = self.product_catalog.get(product_key)
+            if product_details:
+                # 使用 original_display_name 以获得包含规格的完整名称（如果适用）
+                display_name = product_details.get('original_display_name', product_details.get('name'))
+                if display_name and display_name not in similar_product_names: # 确保名称存在且不重复添加
+                    similar_product_names.append(display_name)
+            else:
+                logger.warning(f"find_similar_products: 无法从产品目录中找到 key='{product_key}' 的产品详情。")
+        
+        logger.info(f"find_similar_products: 为查询 '{query_string}' 找到 {len(similar_product_names)} 个相似产品: {similar_product_names}")
+        return similar_product_names

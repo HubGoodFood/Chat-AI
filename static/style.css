@@ -371,3 +371,112 @@ button:active {
 body.dark-mode #themeToggle {
     color: var(--secondary-color);
 }
+
+/* 澄清选项按钮样式 */
+.clarification-options-container {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.clarification-btn {
+    background-color: var(--primary-light);
+    color: var(--primary-dark);
+    border: 1px solid var(--primary-dark);
+    padding: 8px 12px;
+    border-radius: 16px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s ease;
+}
+
+.clarification-btn:hover {
+    background-color: var(--primary-color);
+    color: white;
+    transform: translateY(-1px);
+}
+
+.clarification-btn:disabled {
+    background-color: #e0e0e0;
+    color: #a0a0a0;
+    border-color: #c0c0c0;
+    cursor: default;
+    opacity: 0.7;
+}
+
+body.dark-mode .clarification-btn {
+    background-color: var(--primary-light); /* 在暗黑模式下，按钮背景可以更亮一些 */
+    color: var(--text-color); /* 暗黑模式下的文字颜色 */
+    border: 1px solid var(--primary-color);
+}
+
+body.dark-mode .clarification-btn:hover {
+    background-color: var(--primary-dark);
+    color: var(--white); /* 暗黑模式下，hover时文字用白色背景的颜色变量 */
+}
+
+body.dark-mode .clarification-btn:disabled {
+    background-color: #555;
+    color: #888;
+    border-color: #666;
+}
+
+/* 产品建议按钮样式 */
+.product-suggestions-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px; /* 控制按钮之间的间距 */
+    margin-top: 10px; /* 与聊天消息区隔开 */
+    margin-bottom: 10px; /* 底部也加一些间距 */
+}
+
+.product-suggestion-btn {
+    padding: 8px 12px;
+    background-color: var(--primary-light);
+    color: var(--primary-dark);
+    border: 1px solid var(--primary-dark);
+    border-radius: 16px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s ease;
+    text-align: center; /* 确保文本居中 */
+}
+
+.product-suggestion-btn:hover {
+    background-color: var(--primary-color);
+    color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* 添加轻微阴影提升效果 */
+}
+
+.product-suggestion-btn:disabled {
+    background-color: #e0e0e0;
+    color: #a0a0a0;
+    border-color: #c0c0c0;
+    cursor: default;
+    opacity: 0.7;
+    transform: translateY(0); /* 禁用时移除hover效果 */
+}
+
+/* 暗黑模式下的产品建议按钮样式 */
+body.dark-mode .product-suggestions-container {
+    /* 如果需要，可以为容器在暗黑模式下添加特定样式 */
+}
+
+body.dark-mode .product-suggestion-btn {
+    background-color: var(--primary-light); /* 暗黑模式下，按钮背景可以参考澄清按钮 */
+    color: var(--text-color); /* 使用暗黑模式的文字颜色 */
+    border: 1px solid var(--primary-color);
+}
+
+body.dark-mode .product-suggestion-btn:hover {
+    background-color: var(--primary-dark);
+    color: var(--white); /* 暗黑模式下，hover时文字用白色背景的颜色变量 */
+}
+
+body.dark-mode .product-suggestion-btn:disabled {
+    background-color: #555;
+    color: #888;
+    border-color: #666;
+}

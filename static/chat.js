@@ -76,8 +76,50 @@ function sendMessage() {
             chatbox.removeChild(typingIndicator);
             const aiMsgElement = document.createElement('div');
             aiMsgElement.className = 'message ai-message';
-            aiMsgElement.innerHTML = '<p class="message-content">' + formatResponse(data.response) + '</p>' +
-                '<div class="timestamp">今天 ' + getCurrentTimestamp() + '</div>';
+
+            const messageContent = document.createElement('p');
+            messageContent.className = 'message-content';
+            messageContent.innerHTML = formatResponse(data.response);
+            aiMsgElement.appendChild(messageContent);
+
+            if (data.clarification_options && data.clarification_options.length > 0) {
+                const optionsContainer = document.createElement('div');
+                optionsContainer.className = 'clarification-options-container';
+                data.clarification_options.forEach(option => {
+                    const button = document.createElement('button');
+                    button.className = 'clarification-btn';
+                    button.textContent = option.display_text;
+                    button.dataset.payload = option.payload;
+                    button.addEventListener('click', function() {
+                        sendClarificationChoice(option.payload, optionsContainer);
+                    });
+                    optionsContainer.appendChild(button);
+                });
+                aiMsgElement.appendChild(optionsContainer);
+            }
+
+            // 处理产品建议
+            if (data.product_suggestions && data.product_suggestions.length > 0) {
+                const suggestionsContainer = document.createElement('div');
+                suggestionsContainer.className = 'product-suggestions-container';
+                data.product_suggestions.forEach(suggestion => {
+                    const button = document.createElement('button');
+                    button.className = 'product-suggestion-btn'; // 建议使用新的类名以区分样式
+                    button.textContent = suggestion.display_text;
+                    button.dataset.payload = suggestion.payload;
+                    button.addEventListener('click', function() {
+                        sendProductSuggestionChoice(suggestion.payload, suggestionsContainer);
+                    });
+                    suggestionsContainer.appendChild(button);
+                });
+                aiMsgElement.appendChild(suggestionsContainer);
+            }
+
+            const timestamp = document.createElement('div');
+            timestamp.className = 'timestamp';
+            timestamp.textContent = '今天 ' + getCurrentTimestamp();
+            aiMsgElement.appendChild(timestamp);
+
             chatbox.appendChild(aiMsgElement);
             document.getElementById('sendBtn').disabled = false;
             chatbox.scrollTop = chatbox.scrollHeight;
@@ -99,6 +141,36 @@ function sendMessage() {
 
 function sendQuickMessage(message) {
     document.getElementById('userInput').value = message;
+    sendMessage();
+}
+
+function sendClarificationChoice(payload, optionsContainer) {
+    // 可选：禁用所有澄清按钮以防止重复点击
+    const buttons = optionsContainer.getElementsByClassName('clarification-btn');
+    for (let btn of buttons) {
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        btn.style.cursor = 'default';
+    }
+
+    // 将 payload 作为新消息发送
+    const userInputElement = document.getElementById('userInput');
+    userInputElement.value = `product_selection:${payload}`; // 使用约定的前缀
+    sendMessage();
+}
+
+function sendProductSuggestionChoice(payload, suggestionsContainer) {
+    // 禁用所有产品建议按钮以防止重复点击
+    const buttons = suggestionsContainer.getElementsByClassName('product-suggestion-btn');
+    for (let btn of buttons) {
+        btn.disabled = true;
+        btn.style.opacity = '0.7'; // 与澄清按钮保持一致的禁用样式
+        btn.style.cursor = 'default';
+    }
+
+    // 将 payload 作为新消息发送
+    const userInputElement = document.getElementById('userInput');
+    userInputElement.value = payload; // 直接发送 payload，后端应能处理
     sendMessage();
 }
 

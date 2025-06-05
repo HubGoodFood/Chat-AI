@@ -5,7 +5,14 @@ load_dotenv()
 
 # --- 模糊匹配配置 ---
 FUZZY_MATCH_THRESHOLD = 0.6
+MIN_SUBSTRING_MATCH_LENGTH = 2
 
+# --- 产品查询与澄清逻辑配置 ---
+MIN_ACCEPTABLE_MATCH_SCORE = 0.6  # 模糊匹配产品名称时，可接受的最低匹配分数
+PRICE_OR_BUY_CLARIFICATION_CANDIDATE_THRESHOLD = 0.7  # 当多个产品匹配得分高于此阈值时，可能会触发用户澄清
+DOMINANT_MATCH_THRESHOLD = 0.85  # 如果最相关的产品匹配得分高于此阈值，并且显著优于其他产品，则可能直接选择该产品而无需澄清
+SIGNIFICANT_SCORE_DIFFERENCE = 0.15  # 如果最高匹配得分与次高匹配得分之间的差异大于此值，则认为最高匹配是显著更优的
+MAX_CLARIFICATION_OPTIONS = 3  # 在向用户请求澄清时，最多提供的产品选项数量
 # --- 意图关键词 --- 
 BUY_INTENT_KEYWORDS = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只", "卖"]
 PRICE_QUERY_KEYWORDS = ["多少钱", "价格是", "什么价", "价钱"]
