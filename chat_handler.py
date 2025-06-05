@@ -379,33 +379,101 @@ class ChatHandler:
             for key, details in category_prods_filtered[:needed]:
                  recommended_products.append((key, details, "精选"))
 
-        # 如果以上推荐不足，从全局补充
+        # 如果以上推荐不足，从全局补充，并增强多样性
         if not recommended_products or len(recommended_products) < 3:
-            num_to_add = 3 - len(recommended_products)
-            all_potential_recs = self.product_manager.get_seasonal_products(3) + \
-                                 self.product_manager.get_popular_products(3)
-            temp_recs_dict = {} # 用于去重
-            for key, details in all_potential_recs:
-                if key not in temp_recs_dict:
-                    temp_recs_dict[key] = details
+            needed_fallback_count = 3 - len(recommended_products)
             
-            fallback_keys = list(temp_recs_dict.keys())
-            random.shuffle(fallback_keys)
+            # 1. 收集全局的当季和热门产品作为候选池
+            potential_fallback_pool = {}
+            # Add seasonal products
+            for key, details in self.product_manager.get_seasonal_products(limit=5): # Get a slightly larger pool
+                if key not in [p[0] for p in recommended_products] and key not in potential_fallback_pool:
+                    potential_fallback_pool[key] = (details, "当季推荐")
+            # Add popular products
+            for key, details in self.product_manager.get_popular_products(limit=5): # Get a slightly larger pool
+                if key not in [p[0] for p in recommended_products] and key not in potential_fallback_pool:
+                    # If already added as seasonal, popular tag might be less preferred, or combine tags
+                    tag_to_use = "热门单品"
+                    if key in self.product_manager.seasonal_products: # Check if it's also seasonal
+                        tag_to_use = "当季热门" # Or keep "当季推荐"
+                    potential_fallback_pool[key] = (details, tag_to_use)
+
+            # 2. 尝试从候选池中挑选，优先保证类别多样性
+            fallback_candidates = list(potential_fallback_pool.items())
+            random.shuffle(fallback_candidates) # Shuffle to vary selection if multiple options have same priority
+
+            # Get categories already in recommended_products
+            existing_categories_in_rec = {details['category'] for _, details, _ in recommended_products}
+
+            # Iteratively add products, prioritizing new categories
+            added_count = 0
+            # Phase 1: Try to add products from new categories
+            for key, (details, tag) in fallback_candidates:
+                if added_count >= needed_fallback_count: break
+                if details['category'] not in existing_categories_in_rec:
+                    recommended_products.append((key, details, tag))
+                    existing_categories_in_rec.add(details['category'])
+                    added_count += 1
             
-            for key in fallback_keys:
-                if len(recommended_products) >= 3: break
-                if key not in [p[0] for p in recommended_products]:
-                     # 确定一个合适的标签
-                    tag = "为您优选"
-                    if key in self.product_manager.seasonal_products:
-                        tag = "当季推荐"
-                    elif self.product_manager.popular_products.get(key, 0) > 0: # 假设热度大于0即为热门
-                        tag = "热门单品"
-                    recommended_products.append((key, temp_recs_dict[key], tag))
+            # Phase 2: If still need more, add remaining from candidates regardless of category (already shuffled)
+            if added_count < needed_fallback_count:
+                for key, (details, tag) in fallback_candidates:
+                    if added_count >= needed_fallback_count: break
+                    if key not in [p[0] for p in recommended_products]: # Ensure no duplicates
+                        recommended_products.append((key, details, tag))
+                        added_count += 1
+            
+            # Fallback to truly random if all else fails (e.g. very few products in catalog)
+            # This part might be redundant if the above logic is robust enough or if product catalog is always populated.
+            if len(recommended_products) < 3:
+                all_product_keys = [k for k in self.product_manager.product_catalog.keys() if k not in [p[0] for p in recommended_products]]
+                random.shuffle(all_product_keys)
+                for key in all_product_keys:
+                    if len(recommended_products) >= 3: break
+                    details = self.product_manager.product_catalog[key]
+                    tag = "为您甄选" # Generic tag for truly random picks
+                    if key in self.product_manager.seasonal_products: tag = "当季鲜品"
+                    elif self.product_manager.popular_products.get(key,0) > 0 : tag = "人气好物"
+                    recommended_products.append((key, details, tag))
+
 
         if recommended_products:
-            for key, details, tag in recommended_products:
-                response_parts.append(f"- {self.product_manager.format_product_display(details, tag=tag)}")
+            # Ensure we only have up to 3 recommendations
+            final_recommendations = recommended_products[:3]
+
+            for key, details, tag in final_recommendations:
+                # 构建基础展示信息
+                base_display_info = f"{details.get('original_display_name', details.get('name', '未知产品'))}: ${details.get('price', 0):.2f}/{details.get('specification', 'N/A')}"
+                description = details.get('description', '')
+                if description:
+                    base_display_info += f" - {description}"
+
+                # 构建解释语句
+                explanation = ""
+                # 优先使用 tag 生成解释
+                if tag == "当季新鲜":
+                    explanation = " (这款是当季的，保证新鲜！😋)"
+                elif tag == "热门好评":
+                    explanation = " (这款特别受欢迎，很多朋友都推荐！👍)"
+                elif tag == "精选":
+                    explanation = " (这是我们为您精心挑选的优质品！✨)"
+                elif tag in ["为您优选", "当季推荐", "热门单品"] and tag: # Fallback tags from global recommendation
+                     explanation = f" ({tag}！)"
+                
+                # TODO: 未来扩展 - 自然融入 Taste 和 Benefits 信息
+                # 当 details['taste'] 和 details['benefits'] 有数据后，可以在这里构建更丰富的解释。
+                # 例如:
+                # taste_info = details.get('taste')
+                # benefits_info = details.get('benefits')
+                # if taste_info and benefits_info:
+                #     explanation += f" 口感{taste_info}，而且{benefits_info}。"
+                # elif taste_info:
+                #     explanation += f" 口感{taste_info}。"
+                # elif benefits_info:
+                #     explanation += f" 它有助于{benefits_info}。"
+                # 需要设计更自然的语句模板来组合这些信息。
+
+                response_parts.append(f"- {base_display_info}{explanation if explanation else ''}")
                 self.product_manager.update_product_popularity(key) # 更新推荐商品的热度
             response_parts.append("\n您对哪个感兴趣，想了解更多，还是需要其他推荐？")
         else:

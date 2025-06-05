@@ -5,6 +5,8 @@ import logging
 import os
 import config
 from cache_manager import CacheManager, cached
+from pypinyin import pinyin, Style
+import Levenshtein # 新增导入
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -207,6 +209,38 @@ class ProductManager:
                         keywords.append(tok)
                     
         return keywords
+
+    def _get_pinyin_forms(self, text: str) -> Dict[str, str]:
+        """为给定文本生成多种形式的拼音"""
+        if not text:
+            return {
+                'full_tone': '',
+                'full_flat': '',
+                'initials': '',
+                'full_flat_joined': ''
+            }
+        # 完整拼音，带声调，例如：[['nǐ'], ['hǎo']]
+        pinyin_list_tone = pinyin(text, style=Style.TONE3, heteronym=False, errors='ignore')
+        # 完整拼音，不带声调，例如：[['ni'], ['hao']]
+        pinyin_list_flat = pinyin(text, style=Style.NORMAL, heteronym=False, errors='ignore')
+        # 首字母，例如：[['n'], ['h']]
+        pinyin_list_initials = pinyin(text, style=Style.INITIALS, strict=False, heteronym=False, errors='ignore')
+
+        # 将拼音列表连接成字符串
+        # full_tone: 'nǐhǎo' (实际pypinyin输出可能是 'ni3hao3' 或类似，取决于TONE3风格)
+        # TONE3 对于 '你好' 输出是 'ni3 hao3' (带空格)，需要处理
+        full_tone_str = "".join(["".join(p) for p in pinyin_list_tone if p])
+        # full_flat: 'nihao'
+        full_flat_str = "".join(["".join(p) for p in pinyin_list_flat if p])
+        # initials: 'nh'
+        initials_str = "".join(["".join(p) for p in pinyin_list_initials if p])
+        
+        return {
+            'full_tone': full_tone_str.replace(" ", ""), # 移除潜在的空格
+            'full_flat': full_flat_str.replace(" ", ""), # 移除潜在的空格
+            'initials': initials_str.replace(" ", ""),   # 移除潜在的空格
+            'full_flat_joined': full_flat_str.replace(" ", "") # 与 full_flat 相同，确保无空格
+        }
     
     def update_product_popularity(self, product_key, increment=1):
         """更新商品热度
@@ -313,80 +347,144 @@ class ProductManager:
         query_lower = query_text.lower()
         direct_matches = []
         partial_matches = []
-        
+
+        # 获取查询文本的拼音形式
+        query_pinyin_forms = self._get_pinyin_forms(query_lower)
+        query_pinyin_flat = query_pinyin_forms['full_flat']
+        query_pinyin_initials = query_pinyin_forms['initials']
+
         # 0. 检查是否有完全匹配的产品名称
         for key, details in self.product_catalog.items():
-            product_name = details['name'].lower()
-            # 完全匹配
-            if query_lower == product_name or query_lower == key:
-                return [(key, 1.0)]  # 完全匹配，直接返回
-        
-        # 1. 尝试直接匹配产品名或catalog_key
+            product_name_lower = details['name'].lower()
+            if query_lower == product_name_lower or query_lower == key:
+                return [(key, 1.0)]
+
+        # 1. 尝试直接包含匹配 (产品名、关键词)
         for key, details in self.product_catalog.items():
-            product_name = details['name'].lower()
-            # 部分匹配 - 查询是产品名的一部分，或产品名是查询的一部分
-            if query_lower in product_name or product_name in query_lower:
-                # 计算匹配度 - 匹配的字符占比
-                match_ratio = len(query_lower) / len(product_name) if len(product_name) > 0 else 0
-                direct_matches.append((key, max(0.8, match_ratio)))  # 至少0.8的相似度
+            product_name_lower = details['name'].lower()
+            # 查询是产品名的一部分，或产品名是查询的一部分
+            if query_lower in product_name_lower or product_name_lower in query_lower:
+                match_ratio = len(query_lower) / len(product_name_lower) if len(product_name_lower) > 0 else 0
+                # 使用max(0.8, match_ratio)可能过高，调整为更依赖实际重叠比例，但给予一个基础分
+                direct_matches.append((key, 0.7 + 0.2 * match_ratio)) # 基础0.7，根据重叠比例增加
             
-            # 检查产品的关键词
             for keyword in details.get('keywords', []):
                 if keyword.lower() in query_lower or query_lower in keyword.lower():
-                    direct_matches.append((key, 0.75))  # 关键词匹配
+                    direct_matches.append((key, 0.72)) # 关键词直接包含匹配，给一个稍高的固定分
                     break
-
+        
+        # 如果有直接匹配结果，优先返回得分较高的
         if direct_matches:
-            # 按相似度和产品名长度排序
-            direct_matches.sort(key=lambda x: (x[1], len(self.product_catalog[x[0]]['name'])), reverse=True)
-            return direct_matches
+            direct_matches.sort(key=lambda x: x[1], reverse=True)
+            # 如果最高分已经很高（例如 > 0.85），可以考虑直接返回，减少后续计算
+            if direct_matches[0][1] > 0.85:
+                 return direct_matches[:3] # 返回前几个高分匹配
 
-        # 2. 尝试关键词部分匹配 (Jaccard相似度)
+        # 2. 综合多种模糊匹配策略
         query_words = set(self._tokenize(query_lower))
-        if not query_words:
-            return []
-
+        
         for key, details in self.product_catalog.items():
-            product_name = details['name'].lower()
-            product_name_words = set(self._tokenize(product_name))
-            product_key_words = set(self._tokenize(key))
-            keywords_words = set()
-            for kw in details.get('keywords', []):
-                keywords_words.update(self._tokenize(kw.lower()))
+            # 避免重复计算已在direct_matches中的高分项
+            if any(key == dm_key for dm_key, dm_score in direct_matches if dm_score > 0.8):
+                continue
 
-            # 计算各种相似度
-            # 名称的Jaccard相似度
+            product_name_lower = details['name'].lower()
+            product_pinyin_forms = details.get('pinyin_forms', self._get_pinyin_forms(product_name_lower)) # 兼容旧缓存
+            
+            # a. Jaccard 相似度 (名称和关键词)
+            product_name_words = set(self._tokenize(product_name_lower))
             intersection_name = query_words.intersection(product_name_words)
             union_name = query_words.union(product_name_words)
-            similarity_name = len(intersection_name) / len(union_name) if union_name else 0
+            similarity_jaccard_name = len(intersection_name) / len(union_name) if union_name else 0
+            
+            similarity_jaccard_kw = 0
+            keywords_words = set()
+            for kw in details.get('keywords', []): keywords_words.update(self._tokenize(kw.lower()))
+            if keywords_words:
+                intersection_kw = query_words.intersection(keywords_words)
+                union_kw = query_words.union(keywords_words)
+                similarity_jaccard_kw = len(intersection_kw) / len(union_kw) if union_kw else 0
 
-            # 关键词的Jaccard相似度
-            intersection_kw = query_words.intersection(keywords_words)
-            union_kw = query_words.union(keywords_words)
-            similarity_kw = len(intersection_kw) / len(union_kw) if union_kw else 0
-
-            # 计算字符级别的相似度 (对中文更友好)
+            # b. 字符级别 Jaccard 相似度
             chars_query = set(query_lower)
-            chars_product = set(product_name)
+            chars_product = set(product_name_lower)
             intersection_chars = chars_query.intersection(chars_product)
-            similarity_chars = len(intersection_chars) / max(len(chars_query), len(chars_product)) if chars_product else 0
+            similarity_char_jaccard = len(intersection_chars) / max(1, len(chars_query.union(chars_product)))
 
-            # 取较高的相似度，但给予字符级别相似度更高的权重
-            similarity = max(
-                similarity_name,
-                similarity_kw,
-                similarity_chars * 1.2  # 提高字符级别相似度的权重
-            )
 
-            # 特殊处理：如果查询中包含产品名的全部字符，给予额外加分
-            if all(char in chars_product for char in chars_query) and len(chars_query) > 1:
-                similarity = max(similarity, 0.7)  # 至少0.7的相似度
+            # c. Levenshtein 编辑距离相似度
+            max_len = max(len(query_lower), len(product_name_lower))
+            similarity_levenshtein = 0
+            if max_len > 0:
+                distance = Levenshtein.distance(query_lower, product_name_lower)
+                similarity_levenshtein = 1 - (distance / max_len)
+            
+            # d. 拼音相似度
+            similarity_pinyin = 0
+            product_py_flat = product_pinyin_forms.get('full_flat', '')
+            product_py_initials = product_pinyin_forms.get('initials', '')
 
-            if similarity >= threshold:
-                partial_matches.append((key, similarity))
+            if query_pinyin_flat and product_py_flat:
+                if query_pinyin_flat == product_py_flat:
+                    similarity_pinyin = max(similarity_pinyin, 0.85) # 完全匹配全拼
+                elif query_pinyin_flat in product_py_flat:
+                    similarity_pinyin = max(similarity_pinyin, 0.65 + 0.1 * (len(query_pinyin_flat) / len(product_py_flat)))
+                elif product_py_flat in query_pinyin_flat: # 查询拼音更长
+                     similarity_pinyin = max(similarity_pinyin, 0.6 + 0.1 * (len(product_py_flat) / len(query_pinyin_flat)))
 
-        # 按相似度排序
-        partial_matches.sort(key=lambda x: x[1], reverse=True)
+
+            if query_pinyin_initials and product_py_initials:
+                if query_pinyin_initials == product_py_initials:
+                    similarity_pinyin = max(similarity_pinyin, 0.7) # 完全匹配首字母
+                elif query_pinyin_initials in product_py_initials and len(query_pinyin_initials) > 1 : # 避免单个字母匹配
+                     similarity_pinyin = max(similarity_pinyin, 0.55 + 0.1 * (len(query_pinyin_initials) / len(product_py_initials)))
+
+
+            # 综合得分策略 (示例：取最大值，可调整权重)
+            # 字符Jaccard和Levenshtein对于中文错别字和顺序差异更敏感
+            # Jaccard词级别对于语序不敏感的关键词匹配有优势
+            # 拼音处理拼音输入
+            current_max_similarity = 0
+            scores = {
+                "jaccard_name": similarity_jaccard_name * 0.9, # 基础分
+                "jaccard_kw": similarity_jaccard_kw * 0.8,   # 关键词权重稍低
+                "char_jaccard": similarity_char_jaccard * 1.1, # 字符匹配权重稍高
+                "levenshtein": similarity_levenshtein * 1.2, # 编辑距离权重更高
+                "pinyin": similarity_pinyin * 1.0
+            }
+            
+            # 如果查询本身就是纯拼音（无汉字），提高拼音匹配的权重
+            if query_lower == query_pinyin_flat or query_lower == query_pinyin_initials:
+                scores["pinyin"] *= 1.3
+            
+            overall_similarity = max(scores.values())
+
+            # 之前直接包含匹配的得分也加入比较
+            for dm_key, dm_score in direct_matches:
+                if dm_key == key:
+                    overall_similarity = max(overall_similarity, dm_score)
+                    break
+
+            if overall_similarity >= threshold:
+                # 避免重复添加，如果已在direct_matches中，则更新分数（如果更高）
+                existing_match_index = -1
+                for i, (dm_k, _) in enumerate(direct_matches):
+                    if dm_k == key:
+                        existing_match_index = i
+                        break
+                if existing_match_index != -1:
+                    if overall_similarity > direct_matches[existing_match_index][1]:
+                        direct_matches[existing_match_index] = (key, overall_similarity)
+                else: # 否则作为新匹配添加
+                     partial_matches.append((key, overall_similarity))
+
+        # 合并 direct_matches 和 partial_matches，去重并排序
+        final_matches_dict = {key: score for key, score in direct_matches}
+        for key, score in partial_matches:
+            if key not in final_matches_dict or score > final_matches_dict[key]:
+                final_matches_dict[key] = score
+        
+        sorted_matches = sorted(final_matches_dict.items(), key=lambda item: item[1], reverse=True)
         return partial_matches
     
     def find_related_category(self, query_text):
