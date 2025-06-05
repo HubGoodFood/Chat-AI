@@ -47,12 +47,12 @@ CATEGORY_KEYWORD_MAP = {
 # --- LLM 模型参数 ---
 LLM_MAX_TOKENS = 1500
 LLM_TEMPERATURE = 0.5
-LLM_MODEL_NAME = "deepseek-chat" # 模型名称
+LLM_MODEL_NAME = "gemini-2.5-flash-preview-04-17" # 模型名称
 
 # --- API 配置 ---
 # DEEPSEEK_API_KEY 从环境变量 `os.getenv('DEEPSEEK_API_KEY')` 读取
 # 在 app.py 中处理，这里仅作说明
-DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_BASE_URL = "https://openai.newbotai.cn/v1"
 
 # --- 其他配置 ---
 
