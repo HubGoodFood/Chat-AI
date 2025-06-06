@@ -14,20 +14,20 @@
 
 了解以下几个关键文件将帮助您更好地维护本系统：
 
--   **`intent_model/` (目录)**
+-   **`src/models/intent_model/` (目录)**
     -   **作用**: 存放微调后最终生成的模型文件、分词器配置文件以及意图标签映射表 (`label_map.json`)。
     -   **注意**: 这个目录是自动生成的，您**不应**手动修改其中的内容。
 
--   **`intent_training_data.csv` (数据文件)**
+-   **`data/intent_training_data.csv` (数据文件)**
     -   **作用**: **这是您最常打交道的文件**。它包含了所有用于训练模型的“教材”（用户语料和对应的意图标签）。模型的表现好坏直接取决于这份数据的质量。
 
--   **`train_intent_model.py` (训练脚本)**
-    -   **作用**: 用于训练模型的独立脚本。它会读取 `intent_training_data.csv` 的内容，运行训练流程，并最终将生成的新模型保存在 `intent_model/` 目录中。
+-   **`src/app/intent/trainer.py` (训练脚本)**
+    -   **作用**: 用于训练模型的独立脚本。它会读取 `data/intent_training_data.csv` 的内容，运行训练流程，并最终将生成的新模型保存在 `src/models/intent_model/` 目录中。
 
--   **`intent_classifier.py` (分类器模块)**
+-   **`src/app/intent/classifier.py` (分类器模块)**
     -   **作用**: 一个封装了模型加载和预测逻辑的Python类。主应用通过它来使用训练好的模型。
 
--   **`chat_handler.py` (核心聊天逻辑)**
+-   **`src/app/chat/handler.py` (核心聊天逻辑)**
     -   **作用**: 在这个文件中，我们调用 `IntentClassifier` 来识别意图，并根据识别出的意图执行相应的业务逻辑（如回答价格、推荐商品等）。
 
 ---
@@ -49,20 +49,20 @@ pip install -r requirements.txt
 在依赖安装完成后，运行训练脚本来生成您的第一个意图识别模型。
 
 ```bash
-python train_intent_model.py
+python src/app/intent/trainer.py
 ```
 
 这个过程可能需要几分钟，因为它需要从网上下载预训练的BERT模型。当您看到类似以下的输出，并且程序没有报错时，就代表训练成功了。
 
 ```
 ...
-INFO - 验证集准确率提升，保存模型到 'intent_model'
+INFO - 验证集准确率提升，保存模型到 'src/models/intent_model'
 ...
 INFO - 训练完成！
-INFO - 模型已保存到 'intent_model' 目录。
+INFO - 模型已保存到 'src/models/intent_model' 目录。
 ```
 
-训练成功后，您的项目根目录下会出现一个新的 `intent_model` 文件夹。
+训练成功后，您的项目根目录下会出现一个新的 `src/models/intent_model` 文件夹。
 
 **完成以上两步后，您的系统便已准备就绪，可以正常启动和使用了。**
 
@@ -81,13 +81,13 @@ INFO - 模型已保存到 'intent_model' 目录。
 #### 操作流程：
 
 1.  **打开数据文件**:
-    用编辑器打开 [`intent_training_data.csv`](intent_training_data.csv)。
+    用编辑器打开 [`data/intent_training_data.csv`](data/intent_training_data.csv)。
 
 2.  **添加正确标注**:
     在文件末尾添加一行或多行“正确答案”，告诉模型这类句子应该是什么意图。
 
     ```csv
-    # intent_training_data.csv
+    # data/intent_training_data.csv
 
     text,intent
     ... (已有数据)
@@ -99,12 +99,12 @@ INFO - 模型已保存到 'intent_model' 目录。
     保存文件后，回到终端，再次运行训练脚本。
 
     ```bash
-    python train_intent_model.py
+    python src/app/intent/trainer.py
     ```
-    脚本会自动加载包含新数据的完整数据集，训练一个更聪明的模型，并覆盖 `intent_model/` 里的旧模型。
+    脚本会自动加载包含新数据的完整数据集，训练一个更聪明的模型，并覆盖 `src/models/intent_model/` 里的旧模型。
 
 4.  **重启服务**:
-    训练完成后，重启您的主应用（例如 `app.py`）。新的模型将被加载，下次机器人再遇到类似问题时，就会做出正确的判断。
+    训练完成后，重启您的主应用（例如 `src/app/main.py`）。新的模型将被加载，下次机器人再遇到类似问题时，就会做出正确的判断。
 
 ### 场景二：增加一个全新的意图
 
@@ -113,10 +113,10 @@ INFO - 模型已保存到 'intent_model' 目录。
 #### 操作流程：
 
 1.  **添加新意图的数据**:
-    在 [`intent_training_data.csv`](intent_training_data.csv) 文件中，添加几个描述新意图的典型句子。
+    在 [`data/intent_training_data.csv`](data/intent_training_data.csv) 文件中，添加几个描述新意图的典型句子。
 
     ```csv
-    # intent_training_data.csv
+    # data/intent_training_data.csv
 
     text,intent
     ... (已有数据)
@@ -126,10 +126,10 @@ INFO - 模型已保存到 'intent_model' 目录。
     ```
 
 2.  **在代码中处理新意图**:
-    打开 [`chat_handler.py`](chat_handler.py)，在 `handle_chat_message` 方法中，找到意图分发的 `if/elif` 逻辑块，为新的 `complaint` 意图添加一个处理分支。
+    打开 [`src/app/chat/handler.py`](src/app/chat/handler.py)，在 `handle_chat_message` 方法中，找到意图分发的 `if/elif` 逻辑块，为新的 `complaint` 意图添加一个处理分支。
 
     ```python
-    # chat_handler.py -> handle_chat_message()
+    # src/app/chat/handler.py -> handle_chat_message()
 
     ...
     elif intent == 'inquiry_policy':
@@ -146,7 +146,7 @@ INFO - 模型已保存到 'intent_model' 目录。
 
 3.  **重新训练和重启**:
     和场景一完全一样：
-    -   运行 `python train_intent_model.py` 进行训练。
+    -   运行 `python src/app/intent/trainer.py` 进行训练。
     -   重启您的主应用。
 
 现在，您的机器人就学会了如何识别并回应投诉了！

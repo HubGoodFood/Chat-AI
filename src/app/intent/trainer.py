@@ -14,8 +14,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # --- 配置参数 ---
 MODEL_NAME = 'bert-base-chinese'
-TRAINING_DATA_FILE = 'intent_training_data.csv'
-MODEL_SAVE_PATH = 'intent_model'
+TRAINING_DATA_FILE = 'data/intent_training_data.csv'
+MODEL_SAVE_PATH = 'src/models/intent_model'
 NUM_EPOCHS = 4
 BATCH_SIZE = 8
 LEARNING_RATE = 2e-5

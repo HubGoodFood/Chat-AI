@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from product_manager import ProductManager
+from src.app.products.manager import ProductManager
 
 class TestChineseNumberConversion(unittest.TestCase):
     def setUp(self):

@@ -1,11 +1,17 @@
+import sys
+import os
+# Add the project root directory to sys.path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')) # Three levels up from src/app/products
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 import re
 import csv
 import random
 from typing import Dict, List, Tuple # 新增导入，用于类型提示
 import logging
 import os
-import config
-from cache_manager import CacheManager, cached
+from src.config import settings as config
+from src.core.cache import CacheManager, cached
 from pypinyin import pinyin, Style
 import Levenshtein # 新增导入
 
@@ -45,10 +51,9 @@ class ProductManager:
         Returns:
             bool: 加载是否成功
         """
-        # 如果提供相对路径，解析为相对于当前文件的路径
-        if not os.path.isabs(file_path):
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.join(base_dir, file_path)
+        # 移除路径修改逻辑，直接使用传入的 file_path，期望它是正确的路径
+        # (例如，config.PRODUCT_DATA_FILE 应为 "data/products.csv")
+
         # 尝试从缓存加载
         cached_data = self.cache_manager.get_cached_product_data()
         if cached_data:

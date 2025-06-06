@@ -359,4 +359,4 @@ def cached(ttl_seconds=3600, cache_key_func=None):
                 
             return result
         return wrapper
-    return decorator 
+    return decorator

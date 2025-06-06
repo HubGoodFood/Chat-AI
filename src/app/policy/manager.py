@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 class PolicyManager:
     """Load and search policy text with semantic capabilities."""
 
-    def __init__(self, policy_file='policy.json', model_name='paraphrase-multilingual-MiniLM-L12-v2'):
+    def __init__(self, policy_file='data/policy.json', model_name='paraphrase-multilingual-MiniLM-L12-v2'):
         self.policy_file = policy_file
         self.policy_data: Dict[str, Any] = {}
         self.policy_sentences: List[str] = []
@@ -23,9 +23,7 @@ class PolicyManager:
 
     def load_policy(self):
         """Loads policy data from the JSON file."""
-        if not os.path.isabs(self.policy_file):
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            self.policy_file = os.path.join(base_dir, self.policy_file)
+        # Removed path modification logic, self.policy_file is expected to be correct
             
         logger.info(f"Attempting to load policy from: {self.policy_file}")
 
@@ -151,8 +149,11 @@ class PolicyManager:
 
 # Example Usage (for testing)
 if __name__ == '__main__':
-    # Assuming policy.json is in the same directory
-    policy_manager = PolicyManager()
+    # Assuming policy.json is in the same directory (or data/policy.json if run from root)
+    # For this example to run standalone from src/app/policy, it would need policy_file='../../../data/policy.json'
+    # Or, more robustly, configure the path based on expected execution context.
+    # For now, let's assume it's run where 'data/policy.json' is accessible.
+    policy_manager = PolicyManager(policy_file='data/policy.json') # Explicitly set for clarity if run from root
 
     print(f"Policy Version: {policy_manager.get_policy_version()}")
     print(f"Last Updated: {policy_manager.get_policy_last_updated()}")

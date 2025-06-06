@@ -1,18 +1,25 @@
-from flask import Flask, request, jsonify, render_template
+import sys
 import os
+# Add the project root directory to sys.path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from flask import Flask, request, jsonify, render_template
+# import os # Already imported
 import re
 import csv
 import random # Ensure random is imported at the top level
 import logging # 新增：导入日志模块
-import config # 新增：导入配置文件
-import sys  # 导入sys模块用于错误处理
+from src.config import settings as config # Reverted to src.
+# import sys # Already imported
 
-from cache_manager import CacheManager
-from product_manager import ProductManager
-from chat_handler import ChatHandler
-from policy_manager import PolicyManager
+from src.core.cache import CacheManager # Reverted to src.
+from src.app.products.manager import ProductManager # Reverted to src.
+from src.app.chat.handler import ChatHandler # Reverted to src.
+from src.app.policy.manager import PolicyManager # Reverted to src.
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='../../templates', static_folder='../../static') # 修改
 
 # --- 新增：配置日志 ---
 logging.basicConfig(level=logging.DEBUG, # 修改日志级别为 DEBUG

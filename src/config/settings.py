@@ -31,7 +31,7 @@ POLICY_KEYWORD_MAP = {
     "general": ["政策", "条款", "规定", "须知", "问题"]
 }
 
-POLICY_FILE = os.getenv("POLICY_FILE", "policy.md")
+POLICY_FILE = os.getenv("POLICY_FILE", "data/policy.json")
 
 # --- 产品类别关键词 ---
 FRUIT_KEYWORDS = ["苹果", "梨", "香蕉", "橙子", "橘子", "柚子", "葡萄", "西瓜", "哈密瓜", "草莓", "蓝莓",
@@ -66,8 +66,11 @@ DEEPSEEK_BASE_URL = "https://llm.chutes.ai/v1"
 
 # --- 其他配置 ---
 
-# 允许通过环境变量自定义产品 CSV 路径，默认使用仓库根目录下的 products.csv
-PRODUCT_DATA_FILE = os.getenv("PRODUCT_DATA_FILE", "products.csv")
+# 允许通过环境变量自定义产品 CSV 路径
+PRODUCT_DATA_FILE = os.getenv("PRODUCT_DATA_FILE", "data/products.csv")
+# 允许通过环境变量自定义意图训练数据路径
+INTENT_TRAINING_DATA_FILE = os.getenv("INTENT_TRAINING_DATA_FILE", "data/intent_training_data.csv")
+
 
 # --- LLM Client Initialization ---
 from openai import OpenAI # 确保 openai 库被导入
@@ -94,4 +97,4 @@ else:
         config_logger.info(f"LLM 客户端已成功配置 (config.py)，指向: {DEEPSEEK_BASE_URL}")
     except Exception as e:
         config_logger.error(f"在 config.py 中配置 LLM 客户端失败: {e}")
-        llm_client = None # 确保在失败时 llm_client 是 None 
+        llm_client = None # 确保在失败时 llm_client 是 None

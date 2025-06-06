@@ -1,11 +1,17 @@
+import sys
+import os
+# Add the project root directory to sys.path to allow for absolute imports from src
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')) # Three levels up from src/app/chat
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 import re
 import logging
-import config
+from src.config import settings as config
 from typing import Tuple, Optional, Dict, Any, Union
-from cache_manager import CacheManager
-from product_manager import ProductManager
-from policy_manager import PolicyManager
-from intent_classifier import IntentClassifier # 导入新的意图分类器
+from src.core.cache import CacheManager
+from src.app.products.manager import ProductManager
+from src.app.policy.manager import PolicyManager
+from src.app.intent.classifier import IntentClassifier
 import random
 
 # 配置日志
@@ -26,7 +32,7 @@ class ChatHandler:
         self.product_manager = product_manager
         self.policy_manager = policy_manager or PolicyManager()
         self.cache_manager = cache_manager or CacheManager()
-        self.intent_classifier = IntentClassifier(model_path="intent_model") # 初始化意图分类器
+        self.intent_classifier = IntentClassifier(model_path="src/models/intent_model") # 初始化意图分类器
         
         # 用户会话状态
         self.user_sessions = {}  # {user_id: session_data}

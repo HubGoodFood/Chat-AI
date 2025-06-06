@@ -3,10 +3,10 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from policy_manager import PolicyManager
-from chat_handler import ChatHandler
-from product_manager import ProductManager
-from cache_manager import CacheManager
+from src.app.policy.manager import PolicyManager
+from src.app.chat.handler import ChatHandler
+from src.app.products.manager import ProductManager
+from src.core.cache import CacheManager
 
 class TestPolicyQuestion(unittest.TestCase):
     def setUp(self):

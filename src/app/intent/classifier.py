@@ -10,7 +10,7 @@ class IntentClassifier:
     """
     使用预训练的BERT模型进行意图分类。
     """
-    def __init__(self, model_path: str = "intent_model"):
+    def __init__(self, model_path: str = "src/models/intent_model"):
         """
         初始化意图分类器。
 

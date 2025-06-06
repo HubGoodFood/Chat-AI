@@ -12,10 +12,10 @@
    ```
 3. **配置环境变量**
    - `DEEPSEEK_API_KEY`：用于调用 DeepSeek LLM 的 API key（可选）。
-   - `PRODUCT_DATA_FILE`：自定义产品 CSV 路径，默认为仓库根目录下的 `products.csv`。
+   - `PRODUCT_DATA_FILE`：自定义产品 CSV 路径，默认为 `data/products.csv`。
 4. **启动应用**
    ```bash
-   python app.py
+   python src/app/main.py
    ```
    启动后访问 `http://localhost:5000/` 即可进入聊天界面。
 
