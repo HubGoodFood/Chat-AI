@@ -27,7 +27,8 @@ POLICY_KEYWORD_MAP = {
     "delivery": ["配送", "送货", "运费", "截单"],
     "refund": ["退款", "退货", "质量", "credit"],
     "payment": ["付款", "支付", "venmo", "汇款"],
-    "pickup": ["取货", "自取", "取货点", "地址"]
+    "pickup": ["取货", "自取", "取货点", "地址"],
+    "general": ["政策", "条款", "规定", "须知", "问题"]
 }
 
 POLICY_FILE = os.getenv("POLICY_FILE", "policy.md")

@@ -225,10 +225,12 @@ class ChatHandler:
                for keyword in config.RECOMMEND_KEYWORDS):
             return 'recommendation'
             
-        # 6. 检查是否是政策相关问题
-        for keywords in config.POLICY_KEYWORD_MAP.values():
-            if any(k in user_input_processed for k in keywords):
-                return 'policy_question'
+        # 6. 检查是否是政策相关问题 (提高优先级)
+        policy_keywords_flat = [kw for sublist in config.POLICY_KEYWORD_MAP.values() for kw in sublist]
+        if any(k in user_input_processed for k in policy_keywords_flat):
+            # 如果查询中包含明确的政策性词语，直接判定为政策问题
+            # 这是一个更强的信号，应该优先于宽泛的产品查询
+            return 'policy_question'
 
         # 7. 检查机器人身份查询
         identity_keywords = ["你是谁", "你叫什么", "你是什么", "什么模型", "你的名字", "who are you", "what are you"]
@@ -650,13 +652,13 @@ class ChatHandler:
                 if keyword_excerpt:
                      return f"关于您的政策问题，以下信息可能对您有帮助：\n- {keyword_excerpt}"
                 else:
-                    # 如果关键词搜索也失败，返回None让LLM处理
-                    return None
+                    # 如果关键词搜索也失败，返回一个通用的、引导性的回复
+                    return "关于您提到的政策问题，我暂时没有找到非常具体的信息。您可以换个方式问我，比如“退货政策”或“运费”吗？"
 
         except Exception as e:
             logger.error(f"Error handling policy question with semantic search: {e}")
-            # 如果发生异常，返回None让LLM处理
-            return None
+            # 如果发生异常，返回一个友好的错误提示
+            return "抱歉，在查询政策信息时遇到了一点技术问题，我们正在尽快修复！"
 
     def _handle_price_or_buy_fallback_recommendation(self, user_input_original: str, user_input_processed: str, identified_query_product_name: Optional[str]) -> Optional[str]:
         """辅助函数：当handle_price_or_buy未找到精确产品时，生成相关的产品推荐。
@@ -827,9 +829,11 @@ class ChatHandler:
             # --- 核心修改：在模糊匹配前清洗查询语句 ---
             query_for_matching = user_input_processed
             # 从config中获取所有需要剔除的词
-            all_stopwords = (config.PRICE_QUERY_KEYWORDS + 
-                             config.BUY_INTENT_KEYWORDS + 
+            all_stopwords = (config.PRICE_QUERY_KEYWORDS +
+                             config.BUY_INTENT_KEYWORDS +
                              config.GENERAL_QUERY_KEYWORDS +
+                             config.POLICY_KEYWORD_MAP.get('return_policy', []) + # 排除政策性词语
+                             config.POLICY_KEYWORD_MAP.get('shipping_policy', []) +
                              ["你们", "我们", "我", "你", "他", "她", "它", "的", "地", "得", "了", "着", "过", "吗", "呢", "吧", "呀", "啊", "什么", "是", "不是", "想", "要", "请问", "那个", "这个"])
             
             for stopword in set(all_stopwords):

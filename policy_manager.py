@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Dict, List, Any, Optional
 from sentence_transformers import SentenceTransformer, util
+import torch
 
 logger = logging.getLogger(__name__)
 

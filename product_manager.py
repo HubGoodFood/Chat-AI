@@ -211,6 +211,20 @@ class ProductManager:
                     
         return keywords
 
+    def get_all_product_names_and_keywords(self) -> List[str]:
+        """获取所有产品名称和关键词的扁平列表。"""
+        all_words = set()
+        for key, details in self.product_catalog.items():
+            # 添加产品名称（小写）
+            all_words.add(details['name'].lower())
+            # 添加原始显示名称（小写）
+            if 'original_display_name' in details:
+                all_words.add(details['original_display_name'].lower())
+            # 添加关键词（已经是小写）
+            for kw in details.get('keywords', []):
+                all_words.add(kw)
+        return list(all_words)
+
     def _get_pinyin_forms(self, text: str) -> Dict[str, str]:
         """为给定文本生成多种形式的拼音"""
         if not text:
