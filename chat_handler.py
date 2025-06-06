@@ -229,19 +229,38 @@ class ChatHandler:
             return 'identity_query'
 
         # 检查是否是价格查询或购买意图
-        if (any(keyword in user_input_processed for keyword in config.PRICE_QUERY_KEYWORDS) or
-            any(keyword in user_input_processed for keyword in config.BUY_INTENT_KEYWORDS) or
-            any(keyword in user_input_processed for keyword in config.GENERAL_QUERY_KEYWORDS)):
-            return 'price_or_buy'
-        
-        # 如果输入中直接包含可匹配的产品名称或关键词，也视为价格查询
         try:
-            fuzzy = self.product_manager.fuzzy_match_product(user_input_processed)
-            if fuzzy:
-                return 'price_or_buy'
-        except Exception:
-            pass
+            # --- 使用与 handle_price_or_buy 中类似的查询清洗逻辑，以更准确地识别产品 ---
+            query_for_matching = user_input_processed
+            # 从config中获取所有需要剔除的词
+            all_stopwords = (config.PRICE_QUERY_KEYWORDS +
+                             config.BUY_INTENT_KEYWORDS +
+                             config.GENERAL_QUERY_KEYWORDS +
+                             ["你们", "我们", "我", "你", "他", "她", "它", "的", "地", "得", "了", "着", "过", "吗", "呢", "吧", "呀", "啊", "什么", "是", "不是", "想", "要", "请问", "那个", "这个"])
+            
+            for stopword in set(all_stopwords):
+                query_for_matching = query_for_matching.replace(stopword, '')
+            query_for_matching = query_for_matching.strip()
+            
+            # 如果清洗后仍有内容，则进行模糊匹配
+            if query_for_matching:
+                fuzzy_matches = self.product_manager.fuzzy_match_product(query_for_matching)
+                # 只要能模糊匹配到任何分数可接受的产品，就认为是 price_or_buy 意图
+                if fuzzy_matches and any(score >= config.MIN_ACCEPTABLE_MATCH_SCORE for _, score in fuzzy_matches):
+                    return 'price_or_buy'
+            
+            # 如果清洗后为空（例如，用户只说了"多少钱"），检查原始输入是否包含关键词
+            else:
+                if any(keyword in user_input_processed for keyword in config.PRICE_QUERY_KEYWORDS) or \
+                   any(keyword in user_input_processed for keyword in config.BUY_INTENT_KEYWORDS) or \
+                   any(keyword in user_input_processed for keyword in config.GENERAL_QUERY_KEYWORDS):
+                    return 'price_or_buy' # 依赖上下文处理
+
+        except Exception as e:
+            logger.error(f"Error during intent detection's fuzzy match: {e}")
+            pass # Fall through to unknown
         
+        # 如果没有匹配到任何可接受的产品，则让LLM来处理
         return 'unknown'
         
     def handle_chat_message(self, user_input: str, user_id: str) -> Union[str, Dict, None]:
@@ -1063,6 +1082,7 @@ class ChatHandler:
                 "10. 如果上文提到过某个产品 (session['last_product_details']), 而当前用户问题不清晰，可以优先考虑与该产品相关。"
                 "11. (新增) 如果顾客的问题不是很明确（例如只说'随便看看'或者'有什么好的'），请主动提问来澄清他们的需求，比如询问他们偏好的品类（水果、蔬菜等）、口味（甜的、酸的）、或者用途（自己吃、送礼等）。"
                 "12. (新增) 当顾客遇到问题或者对某些信息不满意时，请表现出同理心，并积极尝试帮助他们解决问题或找到替代方案。在对话中，可以适当运用一些亲和的语气词，但避免过度使用表情符号。"
+                "13. (重要) 当告知用户某商品缺货并推荐替代品时，请务必保持回复简洁、友好、切中要点。你可以先对用户想找的商品表示理解（例如，'蓝莓确实很受欢迎呢'），然后明确告知我们暂时没有，最后自然地推荐1-2个最相关的替代品即可。请避免生成与此模式无关的、冗长或重复的文字。"
             )
             messages = [{"role": "system", "content": system_prompt}]
             
@@ -1161,12 +1181,20 @@ class ChatHandler:
                     for i, details in enumerate(relevant_items_for_llm[:MAX_LLM_CONTEXT_ITEMS]):
                         context_for_llm += f"- {self.product_manager.format_product_display(details)}\n"
             
-            messages.append({"role": "system", "content": "产品参考信息：" + context_for_llm})
-            messages.append({"role": "user", "content": user_input})
+            # 将所有系统信息合并到一条 system prompt 中，以避免模型混淆
+            final_system_prompt = messages[0]['content'] # 从已有的 messages 列表开始
+            if context_for_llm.strip():
+                final_system_prompt += "\n\n---\n\n以下是产品参考信息，请在回答时利用这些信息：\n" + context_for_llm
+            
+            # 构建最终的消息列表
+            final_messages = [
+                {"role": "system", "content": final_system_prompt},
+                {"role": "user", "content": user_input}
+            ]
                 
             chat_completion = config.llm_client.chat.completions.create(
                 model=config.LLM_MODEL_NAME,
-                messages=messages,
+                messages=final_messages,
                 max_tokens=config.LLM_MAX_TOKENS,
                 temperature=config.LLM_TEMPERATURE
             )
