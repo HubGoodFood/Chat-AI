@@ -367,6 +367,30 @@ class ProductManager:
         """
         if not query_text or not self.product_catalog:
             return []
+
+        # --- 新增：常见问候语列表 ---
+        COMMON_GREETINGS = {
+            "你好", "您好", "hello", "hi", "你好呀", "你好吗", "在吗", "你好么",
+            "早上好", "中午好", "下午好", "晚上好", "早安", "午安", "晚安"
+        }
+        # ---
+
+        # --- 统一清理和规范化查询文本 ---
+        # 移除标点符号，去除首尾空格，并转换为小写
+        # 使用原始 query_text 进行日志记录，使用 normalized_query_text 进行匹配
+        original_query_for_log = query_text
+        normalized_query_text = re.sub(r'[^\w\s]', '', query_text).strip().lower()
+        # ---
+
+        if not normalized_query_text: # 如果清理后为空，也直接返回
+            logger.debug(f"Query '{original_query_for_log}' normalized to empty string. Skipping product matching.")
+            return []
+
+        # --- 新增：检查是否为常见问候语 ---
+        if normalized_query_text in COMMON_GREETINGS:
+            logger.info(f"Query '{original_query_for_log}' (Normalized: '{normalized_query_text}') identified as a common greeting. Skipping product matching.")
+            return []
+        # ---
             
         # 权重配置，用于调整不同匹配算法的重要性
         weights = {
@@ -377,41 +401,41 @@ class ProductManager:
             'pinyin': 0.1         # 降低拼音匹配的权重
         }
         
-        # --- 修正：先清理文本，再计算奖励 ---
-        # 清理查询文本，移除标点符号和多余空格
-        query_text = re.sub(r'[^\w\s]', '', query_text).strip()
-        
         # 特殊处理：如果查询是单个汉字，则优先考虑直接包含关系
-        exact_match_bonus = 0.5 if len(query_text) == 1 else 0.3
+        # 使用 normalized_query_text 的长度
+        exact_match_bonus = 0.5 if len(normalized_query_text) == 1 else 0.3
         
         results = []
-        query_text_lower = query_text.lower()
+        # query_text_lower 现在是 normalized_query_text
         
         for product_key, product_details in self.product_catalog.items():
             product_name = product_details.get('name', '')
-            product_original_name = product_details.get('original_display_name', product_name)
+            product_original_name = product_details.get('original_display_name', product_name) # 用于日志
             product_name_lower = product_name.lower()
             
-            # 计算各种相似度指标
-            jaccard_name_score = self._jaccard_similarity(query_text_lower, product_name_lower)
+            # 计算各种相似度指标，使用 normalized_query_text 和 product_name_lower
+            jaccard_name_score = self._jaccard_similarity(normalized_query_text, product_name_lower)
             
             # 关键词匹配
             product_keywords = product_details.get('keywords', [])
-            jaccard_kw_score = self._jaccard_similarity_lists(query_text_lower.split(), product_keywords)
+            # normalized_query_text.split() 可能需要进一步处理，例如过滤空字符串
+            query_tokens = [token for token in normalized_query_text.split() if token]
+            jaccard_kw_score = self._jaccard_similarity_lists(query_tokens, product_keywords)
             
             # 字符级别的Jaccard相似度
-            char_jaccard_score = self._character_jaccard_similarity(query_text, product_name)
+            char_jaccard_score = self._character_jaccard_similarity(normalized_query_text, product_name_lower)
             
             # Levenshtein编辑距离相似度
-            levenshtein_score = self._levenshtein_similarity(query_text, product_name)
+            levenshtein_score = self._levenshtein_similarity(normalized_query_text, product_name_lower)
             
             # 拼音相似度
-            pinyin_score = self._pinyin_similarity(query_text, product_name)
+            pinyin_score = self._pinyin_similarity(normalized_query_text, product_name_lower)
             
             # 调试输出
-            if "芭乐" in product_original_name and "芭乐" in query_text: # 更具体的日志条件
+            # 使用 original_query_for_log 和 product_original_name 进行日志记录，以反映原始输入
+            if "芭乐" in product_original_name and "芭乐" in original_query_for_log:
                 logger.info(f"--- DETAILED DEBUG for '芭乐' MATCH ---")
-                logger.info(f"  Query: '{query_text}' vs Product: '{product_original_name}' (Key: '{product_key}')")
+                logger.info(f"  Query: '{original_query_for_log}' (Normalized: '{normalized_query_text}') vs Product: '{product_original_name}' (Key: '{product_key}')")
                 logger.info(f"    Raw Jaccard Name: {jaccard_name_score:.4f}")
                 logger.info(f"    Raw Jaccard KW: {jaccard_kw_score:.4f} (Keywords: {product_keywords})")
                 logger.info(f"    Raw Char Jaccard: {char_jaccard_score:.4f}")
@@ -423,7 +447,7 @@ class ProductManager:
                 logger.info(f"    Weighted Levenshtein: {levenshtein_score * weights['levenshtein']:.4f}")
                 logger.info(f"    Weighted Pinyin: {pinyin_score * weights['pinyin']:.4f}")
             else:
-                logger.debug(f"--- Debug Scores for Product KEY: '{product_key}', NAME: '{product_original_name}' vs Query: '{query_text}' ---")
+                logger.debug(f"--- Debug Scores for Product KEY: '{product_key}', NAME: '{product_original_name}' vs Query: '{original_query_for_log}' (Normalized: '{normalized_query_text}') ---")
                 logger.debug(f"  Jaccard Name: {jaccard_name_score * weights['jaccard_name']:.4f} (Raw Score: {jaccard_name_score:.4f})")
                 logger.debug(f"  Jaccard KW: {jaccard_kw_score * weights['jaccard_keywords']:.4f} (Raw Score: {jaccard_kw_score:.4f})")
                 logger.debug(f"  Char Jaccard: {char_jaccard_score * weights['char_jaccard']:.4f} (Raw Score: {char_jaccard_score:.4f})")
@@ -440,23 +464,23 @@ class ProductManager:
             ]
             
             # 取最高分
-            max_score = max(weighted_scores)
+            max_score = max(weighted_scores) if weighted_scores else 0.0 # Handle empty weighted_scores
             
             # 特殊处理：如果查询文本直接包含在产品名称中，给予额外加分
             exact_match_applied_log = ""
-            if query_text_lower in product_name_lower: # 使用小写进行包含检查
+            if normalized_query_text and normalized_query_text in product_name_lower: # 使用 normalized_query_text
                 max_score += exact_match_bonus
                 max_score = min(max_score, 1.0)  # 确保分数不超过1
                 exact_match_applied_log = f" (Exact match bonus {exact_match_bonus} applied, new score: {max_score:.4f})"
             
-            if "芭乐" in product_original_name and "芭乐" in query_text:
+            if "芭乐" in product_original_name and "芭乐" in original_query_for_log:
                 logger.info(f"    Max Score from components: {max_score:.4f}{exact_match_applied_log}")
                 logger.info(f"    Final Overall Similarity for KEY: '{product_key}': {max_score:.4f} (Threshold: {threshold})")
 
             if max_score >= threshold:
                 results.append((product_key, max_score))
             
-            if not ("芭乐" in product_original_name and "芭乐" in query_text): # 避免重复记录普通debug日志
+            if not ("芭乐" in product_original_name and "芭乐" in original_query_for_log):
                 logger.debug(f"  Max Score from components: {max_score:.4f}{exact_match_applied_log}")
                 logger.debug(f"  Final Overall Similarity for KEY: '{product_key}': {max_score:.4f} (Threshold: {threshold})")
                 
@@ -464,16 +488,18 @@ class ProductManager:
         results.sort(key=lambda x: x[1], reverse=True)
         
         # 优先返回真正相关的产品（如查询"鸡"时返回含"鸡"的产品）
-        if len(query_text) == 1:
+        if len(normalized_query_text) == 1: # 使用 normalized_query_text
             # 对于单字查询，将直接包含该字的产品排在前面
-            exact_matches = [(k, s) for k, s in results if query_text in self.product_catalog[k].get('name', '')]
-            other_matches = [(k, s) for k, s in results if query_text not in self.product_catalog[k].get('name', '')]
+            # 确保比较时产品名称也是小写
+            exact_matches = [(k, s) for k, s in results if normalized_query_text in self.product_catalog[k].get('name', '').lower()]
+            other_matches = [(k, s) for k, s in results if normalized_query_text not in self.product_catalog[k].get('name', '').lower()]
             results = exact_matches + other_matches
         
         for key, score in results:
             logger.debug(f"找到匹配产品: {self.product_catalog[key].get('name', key)}, 得分: {score}")
             
-        logger.info(f"find_similar_products: 为查询 '{query_text}' 找到 {len(results)} 个相似产品")
+        # 日志中使用原始查询文本
+        logger.info(f"fuzzy_match_product: 为查询 '{original_query_for_log}' (Normalized: '{normalized_query_text}') 找到 {len(results)} 个相似产品")
         return results
     
     def find_related_category(self, query_text):

@@ -28,6 +28,9 @@ text,intent
 "怎么退货",inquiry_policy
 "你是谁",identity_query
 "你叫什么名字",identity_query
+"你是谁啊",identity_query
+"你是什么",identity_query
+"介绍一下你自己",identity_query
 "这个是啥",unknown
 "今天天气不错",unknown
 "这是机器人吗",unknown

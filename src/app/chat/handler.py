@@ -203,7 +203,15 @@ class ChatHandler:
         使用微调后的模型检测用户意图。
         如果模型不可用，则回退到基于关键词的简单规则检测。
         """
-        # 优先使用模型进行预测
+        # --- 规则优先：首先检查明确的、高优先级的模式 ---
+        
+        # 1. 检查是否是纯粹的问候语 (高优先级)
+        # 避免模型将 "你好" 错误地识别为对包含 "好" 字的产品的查询
+        greeting_keywords = ["你好", "您好", "hi", "hello", "在吗"]
+        if user_input_processed in greeting_keywords:
+            return 'greeting'
+
+        # --- 模型预测：如果不是明确的规则匹配，则使用模型 ---
         if self.intent_classifier and self.intent_classifier.model:
             predicted_intent = self.intent_classifier.predict(user_input_processed)
             # 如果模型给出了一个明确的意图（不是unknown），则使用它
@@ -212,11 +220,6 @@ class ChatHandler:
         
         # --- 模型不可用或预测为 'unknown' 时的回退规则 ---
         logger.warning(f"模型无法预测意图或预测为unknown，回退到规则检测: '{user_input_processed}'")
-
-        # 1. 检查是否是纯粹的问候语
-        greeting_keywords = ["你好", "您好", "hi", "hello", "在吗"]
-        if user_input_processed in greeting_keywords:
-            return 'greeting'
 
         # 2. 检查是否询问"卖什么"
         if any(keyword in user_input_processed for keyword in config.WHAT_DO_YOU_SELL_KEYWORDS):

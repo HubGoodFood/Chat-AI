@@ -220,7 +220,7 @@ def main():
             logging.info(f"验证集准确率提升，保存模型到 '{MODEL_SAVE_PATH}'")
             if not os.path.exists(MODEL_SAVE_PATH):
                 os.makedirs(MODEL_SAVE_PATH)
-            model.save_pretrained(MODEL_SAVE_PATH)
+            model.save_pretrained(MODEL_SAVE_PATH, safe_serialization=False)
             tokenizer.save_pretrained(MODEL_SAVE_PATH)
             # 保存标签映射
             with open(os.path.join(MODEL_SAVE_PATH, 'label_map.json'), 'w', encoding='utf-8') as f:
