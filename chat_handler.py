@@ -198,37 +198,44 @@ class ChatHandler:
             
         Returns:
             str: 意图类型 ('quantity_follow_up', 'what_do_you_sell',
-                         'recommendation', 'price_or_buy', 'policy_question', 'identity_query', 'unknown')
+                         'recommendation', 'price_or_buy', 'policy_question', 'identity_query', 'greeting', 'unknown')
         """
-        # 检查是否是追问推荐的意图（如"其他"、"还有"）
+        # 1. 检查是否是纯粹的问候语
+        greeting_keywords = ["你好", "您好", "hi", "hello", "在吗"]
+        # 使用完全匹配来避免误判，例如 "你好，我想买苹果"
+        if user_input_processed in greeting_keywords:
+            return 'greeting'
+
+        # 2. 检查是否是追问推荐的意图（如"其他"、"还有"）
         if any(k in user_input_processed for k in ["其他", "还有"]):
             return 'recommendation_follow_up'
-        # 检查是否是纯数量追问
+            
+        # 3. 检查是否是纯数量追问
         quantity_pattern = r'^\s*([\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*(?:呢|呀|啊|吧|多少钱|总共)?\s*$'
         if re.match(quantity_pattern, user_input_processed):
             return 'quantity_follow_up'
             
-        # 检查是否询问"卖什么"
+        # 4. 检查是否询问"卖什么"
         if any(keyword in user_input_processed
                for keyword in config.WHAT_DO_YOU_SELL_KEYWORDS):
             return 'what_do_you_sell'
             
-        # 检查是否是推荐请求
+        # 5. 检查是否是推荐请求
         if any(keyword in user_input_processed
                for keyword in config.RECOMMEND_KEYWORDS):
             return 'recommendation'
             
-        # 检查是否是政策相关问题
+        # 6. 检查是否是政策相关问题
         for keywords in config.POLICY_KEYWORD_MAP.values():
             if any(k in user_input_processed for k in keywords):
                 return 'policy_question'
 
-        # 检查机器人身份查询
+        # 7. 检查机器人身份查询
         identity_keywords = ["你是谁", "你叫什么", "你是什么", "什么模型", "你的名字", "who are you", "what are you"]
         if any(keyword in user_input_processed for keyword in identity_keywords):
             return 'identity_query'
 
-        # 检查是否是价格查询或购买意图
+        # 8. 检查是否是价格查询或购买意图
         try:
             # --- 使用与 handle_price_or_buy 中类似的查询清洗逻辑，以更准确地识别产品 ---
             query_for_matching = user_input_processed
@@ -347,7 +354,14 @@ class ChatHandler:
         extracted_product_payload = None # 用于存储从回复中提取的产品信息
 
         if intent == 'identity_query':
-            final_response = "我是一个由 DeepSeek-V2 模型驱动的智能客服机器人，专门为您提供生鲜产品信息和推荐服务。"
+            final_response = "我是这里的生鲜小助手，专门为您挑选最新鲜的食材，有什么可以帮您的吗？"
+
+        elif intent == 'greeting':
+            final_response = random.choice([
+                "您好！有什么可以帮您的吗？",
+                "嗨！今天想来点什么新鲜的？",
+                "您好，我是您的专属生鲜小助手，随时为您服务！"
+            ])
 
         elif intent == 'quantity_follow_up':
             final_response, product_key, product_details, _ = self.handle_quantity_follow_up(user_input_processed, user_id)
