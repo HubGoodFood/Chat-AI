@@ -35,18 +35,31 @@ function getUserId() {
     return userId;
 }
 
-function sendMessage() {
+function sendMessage(messageToSend, messageToDisplay) {
     const userInputElement = document.getElementById('userInput');
-    const message = userInputElement.value.trim();
-    if (message === '') return;
+    let internalMessage;
+    let displayMessage;
+
+    // 如果 messageToSend 未定义，说明是用户直接输入，否则是按钮点击
+    if (messageToSend === undefined) {
+        internalMessage = userInputElement.value.trim();
+        displayMessage = internalMessage;
+        userInputElement.value = ''; // 清空输入框
+    } else {
+        internalMessage = messageToSend;
+        displayMessage = messageToDisplay;
+    }
+
+    if (displayMessage === '') return;
 
     const chatbox = document.getElementById('chatbox');
 
+    // 创建并显示用户消息气泡
     const userMsgElement = document.createElement('div');
     userMsgElement.className = 'message user-message';
     const p = document.createElement('p');
     p.className = 'message-content';
-    p.textContent = message;
+    p.textContent = displayMessage; // 使用要显示的消息
     const ts = document.createElement('div');
     ts.className = 'timestamp';
     ts.textContent = '今天 ' + getCurrentTimestamp();
@@ -54,10 +67,10 @@ function sendMessage() {
     userMsgElement.appendChild(ts);
     chatbox.appendChild(userMsgElement);
 
-    userInputElement.value = '';
     userInputElement.focus();
     chatbox.scrollTop = chatbox.scrollHeight;
 
+    // 显示打字指示器
     const typingIndicator = document.createElement('div');
     typingIndicator.className = 'typing-indicator';
     typingIndicator.innerHTML = '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>';
@@ -66,10 +79,11 @@ function sendMessage() {
 
     document.getElementById('sendBtn').disabled = true;
 
+    // 发送内部消息到后端
     fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: message, user_id: getUserId() })
+        body: JSON.stringify({ message: internalMessage, user_id: getUserId() })
     })
         .then(response => response.json())
         .then(data => {
@@ -79,9 +93,12 @@ function sendMessage() {
 
             const messageContent = document.createElement('p');
             messageContent.className = 'message-content';
-            messageContent.innerHTML = formatResponse(data.response);
+            // 检查并使用 data.message 或 data.response (优先使用 message)
+            const messageText = data.message || data.response || "抱歉，收到空回复。";
+            messageContent.innerHTML = formatResponse(messageText);
             aiMsgElement.appendChild(messageContent);
 
+            // 将澄清选项的检查移到消息内容之后
             if (data.clarification_options && data.clarification_options.length > 0) {
                 const optionsContainer = document.createElement('div');
                 optionsContainer.className = 'clarification-options-container';
@@ -91,7 +108,8 @@ function sendMessage() {
                     button.textContent = option.display_text;
                     button.dataset.payload = option.payload;
                     button.addEventListener('click', function() {
-                        sendClarificationChoice(option.payload, optionsContainer);
+                        // 传递 payload 和 display_text
+                        sendClarificationChoice(option.payload, option.display_text, optionsContainer);
                     });
                     optionsContainer.appendChild(button);
                 });
@@ -108,7 +126,8 @@ function sendMessage() {
                     button.textContent = suggestion.display_text;
                     button.dataset.payload = suggestion.payload;
                     button.addEventListener('click', function() {
-                        sendProductSuggestionChoice(suggestion.payload, suggestionsContainer);
+                        // 传递 payload 和 display_text
+                        sendProductSuggestionChoice(suggestion.payload, suggestion.display_text, suggestionsContainer);
                     });
                     suggestionsContainer.appendChild(button);
                 });
@@ -140,12 +159,12 @@ function sendMessage() {
 }
 
 function sendQuickMessage(message) {
-    document.getElementById('userInput').value = message;
-    sendMessage();
+    // 快速消息是用户可见的，所以内部消息和显示消息相同
+    sendMessage(message, message);
 }
 
-function sendClarificationChoice(payload, optionsContainer) {
-    // 可选：禁用所有澄清按钮以防止重复点击
+function sendClarificationChoice(payload, displayText, optionsContainer) {
+    // 禁用所有澄清按钮以防止重复点击
     const buttons = optionsContainer.getElementsByClassName('clarification-btn');
     for (let btn of buttons) {
         btn.disabled = true;
@@ -153,25 +172,21 @@ function sendClarificationChoice(payload, optionsContainer) {
         btn.style.cursor = 'default';
     }
 
-    // 将 payload 作为新消息发送
-    const userInputElement = document.getElementById('userInput');
-    userInputElement.value = `product_selection:${payload}`; // 使用约定的前缀
-    sendMessage();
+    // 调用新的 sendMessage，分别传递内部消息和显示消息
+    sendMessage(`product_selection:${payload}`, displayText);
 }
 
-function sendProductSuggestionChoice(payload, suggestionsContainer) {
+function sendProductSuggestionChoice(payload, displayText, suggestionsContainer) {
     // 禁用所有产品建议按钮以防止重复点击
     const buttons = suggestionsContainer.getElementsByClassName('product-suggestion-btn');
     for (let btn of buttons) {
         btn.disabled = true;
-        btn.style.opacity = '0.7'; // 与澄清按钮保持一致的禁用样式
+        btn.style.opacity = '0.7';
         btn.style.cursor = 'default';
     }
 
-    // 将 payload 作为新消息发送
-    const userInputElement = document.getElementById('userInput');
-    userInputElement.value = payload; // 直接发送 payload，后端应能处理
-    sendMessage();
+    // 调用新的 sendMessage，分别传递内部消息和显示消息
+    sendMessage(`product_selection:${payload}`, displayText);
 }
 
 document.addEventListener('DOMContentLoaded', function () {

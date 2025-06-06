@@ -8,17 +8,19 @@ FUZZY_MATCH_THRESHOLD = 0.6
 MIN_SUBSTRING_MATCH_LENGTH = 2
 
 # --- 产品查询与澄清逻辑配置 ---
-MIN_ACCEPTABLE_MATCH_SCORE = 0.6  # 模糊匹配产品名称时，可接受的最低匹配分数
-PRICE_OR_BUY_CLARIFICATION_CANDIDATE_THRESHOLD = 0.7  # 当多个产品匹配得分高于此阈值时，可能会触发用户澄清
-DOMINANT_MATCH_THRESHOLD = 0.85  # 如果最相关的产品匹配得分高于此阈值，并且显著优于其他产品，则可能直接选择该产品而无需澄清
+MIN_ACCEPTABLE_MATCH_SCORE = 0.4  # 模糊匹配产品名称时，可接受的最低匹配分数
+PRICE_OR_BUY_CLARIFICATION_CANDIDATE_THRESHOLD = 0.65  # 当多个产品匹配得分高于此阈值时，可能会触发用户澄清 (降低以增加澄清机会)
+DOMINANT_MATCH_THRESHOLD = 0.80  # 如果最相关的产品匹配得分高于此阈值，并且显著优于其他产品，则可能直接选择该产品而无需澄清 (降低以增加澄清机会)
 SIGNIFICANT_SCORE_DIFFERENCE = 0.15  # 如果最高匹配得分与次高匹配得分之间的差异大于此值，则认为最高匹配是显著更优的
 MAX_CLARIFICATION_OPTIONS = 3  # 在向用户请求澄清时，最多提供的产品选项数量
+MAX_PRODUCT_SUGGESTIONS_BUTTONS = 3 # 在推荐产品时，最多提供的按钮数量
 # --- 意图关键词 --- 
 BUY_INTENT_KEYWORDS = ["买", "要", "订单", "来一份", "来一", "一份", "一个", "一箱", "一磅", "一袋", "一只", "卖"]
 PRICE_QUERY_KEYWORDS = ["多少钱", "价格是", "什么价", "价钱"]
 WHAT_DO_YOU_SELL_KEYWORDS = ["卖什么", "有什么产品", "商品列表", "菜单", "有哪些东西", "有什么卖"]
 RECOMMEND_KEYWORDS = ["推荐", "介绍点", "什么好吃", "什么值得买", "有什么好", "当季", "新鲜"]
 FOLLOW_UP_KEYWORDS = ["它", "这个", "那个", "这", "那", "刚才", "刚刚"]
+GENERAL_QUERY_KEYWORDS = ["有", "有没有", "卖不卖", "是不是", "有没有卖"]
 
 # --- 平台政策关键词 ---
 POLICY_KEYWORD_MAP = {

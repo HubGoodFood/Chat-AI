@@ -15,7 +15,7 @@ from policy_manager import PolicyManager
 app = Flask(__name__)
 
 # --- 新增：配置日志 ---
-logging.basicConfig(level=logging.INFO, 
+logging.basicConfig(level=logging.DEBUG, # 修改日志级别为 DEBUG
                     format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
 logger = logging.getLogger(__name__)
@@ -33,11 +33,10 @@ policy_manager = PolicyManager()
 try:
     if not product_manager.load_product_data():
         logger.error("应用启动失败：无法加载产品数据。请检查 products.csv 文件和配置。")
-        # 在这种情况下，应用可能无法正常工作，可以考虑退出或进入维护模式
         if os.environ.get('APP_ENV') == 'production':
             logger.critical("生产环境中无法加载产品数据，应用退出")
             sys.exit(1)  # 在生产环境中退出
-        else: # 这个else属于上面的if
+        else:
             logger.warning("开发环境中无法加载产品数据，继续运行但功能可能受限")
 except Exception as e:
     logger.exception(f"加载产品数据时发生致命异常: {e}")
@@ -50,8 +49,8 @@ except Exception as e:
 # 初始化聊天处理器
 try:
     chat_handler = ChatHandler(product_manager=product_manager,
-                               policy_manager=policy_manager,
-                               cache_manager=cache_manager)
+                             policy_manager=policy_manager,
+                             cache_manager=cache_manager)
     logger.info("聊天处理器初始化成功")
 except Exception as e:
     logger.exception(f"初始化聊天处理器时发生异常: {e}")
@@ -67,7 +66,7 @@ except Exception as e:
         except Exception as basic_init_e:
             logger.exception(f"使用基本配置初始化聊天处理器也失败: {basic_init_e}")
             logger.critical("无法初始化聊天处理器，应用将无法处理聊天。请检查配置。")
-            chat_handler = None # 明确设置为 None，后续使用前需要检查
+            chat_handler = None  # 明确设置为 None，后续使用前需要检查
 
 @app.route('/')
 def index():
@@ -102,8 +101,29 @@ def chat():
         final_response = chat_handler.handle_chat_message(user_input_original, user_id)
         
         logger.info(f"最终回复给用户 {user_id}: {final_response}")
-        return jsonify({'response': final_response if final_response is not None 
-                        else "抱歉，我暂时无法理解您的意思，请换个说法试试？"})
+        if isinstance(final_response, dict):
+            # 如果 ChatHandler 返回的是字典，假定它已包含 'message' 键
+            # 以及可能的 'clarification_options' 或 'product_suggestions'。
+            # 前端期望 'message' 和其他选项键在顶层。
+            # 我们需要确保 'message' 键存在。
+            if 'message' not in final_response:
+                if 'clarification_options' in final_response or 'product_suggestions' in final_response:
+                    final_response['message'] = "请查看以下选项："
+                else:
+                    # 对于没有 'message' 且没有已知选项键的字典 (例如空字典)
+                    # chat_handler 应该避免返回这种情况。
+                    final_response['message'] = "抱歉，处理已完成但未提供具体消息。"
+            return jsonify(final_response)
+        elif isinstance(final_response, str):
+            # 如果 ChatHandler 返回的是字符串，将其包装在 'message' 键中。
+            return jsonify({'message': final_response})
+        elif final_response is None:
+            # 如果 ChatHandler 返回 None (例如，没有特定回复或发生内部错误)。
+            return jsonify({'message': "抱歉，我暂时无法理解您的意思，请换个说法试试？"})
+        else:
+            # 处理来自 chat_handler 的任何其他意外类型。
+            logger.error(f"来自ChatHandler的未知响应类型: {type(final_response)}. 原始值: {final_response}")
+            return jsonify({'message': "抱歉，系统响应格式异常。"}), 500
                         
     except Exception as e:
         logger.exception(f"处理聊天请求时发生异常: {e}")

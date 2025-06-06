@@ -1,7 +1,7 @@
 import re
 import csv
 import random
-from typing import Dict # 新增导入，用于类型提示
+from typing import Dict, List, Tuple # 新增导入，用于类型提示
 import logging
 import os
 import config
@@ -334,185 +334,128 @@ class ProductManager:
                     
         return products[:limit]
     
-    @cached(ttl_seconds=600)
-    def fuzzy_match_product(self, query_text, threshold=config.FUZZY_MATCH_THRESHOLD):
-        """使用直接匹配和Jaccard相似度进行产品名称的模糊匹配
+    # @cached(ttl_seconds=600) # 暂时注释掉缓存以进行调试
+    def fuzzy_match_product(self, query_text: str, threshold: float = 0.3) -> List[Tuple[str, float]]:
+        """
+        使用多种匹配算法进行模糊匹配，返回匹配度超过阈值的产品列表。
         
         Args:
-            query_text (str): 用户输入的查询文本
-            threshold (float): Jaccard相似度的阈值
+            query_text: 用户查询文本
+            threshold: 相似度阈值，低于此值的匹配将被过滤
             
         Returns:
-            list: 包含元组 (product_key, similarity_score) 的列表，按相似度降序排列
+            List[Tuple[str, float]]: 包含(product_key, similarity_score)的列表
         """
-        query_lower = query_text.lower()
-        direct_matches = []
-        partial_matches = []
-
-        # 获取查询文本的拼音形式
-        query_pinyin_forms = self._get_pinyin_forms(query_lower)
-        query_pinyin_flat = query_pinyin_forms['full_flat']
-        query_pinyin_initials = query_pinyin_forms['initials']
-
-        # 0. 检查是否有完全匹配的产品名称
-        for key, details in self.product_catalog.items():
-            product_name_lower = details['name'].lower()
-            if query_lower == product_name_lower or query_lower == key:
-                return [(key, 1.0)]
-
-        # 1. 尝试直接包含匹配 (产品名、关键词)
-        for key, details in self.product_catalog.items():
-            product_name_lower = details['name'].lower()
+        if not query_text or not self.product_catalog:
+            return []
             
-            # Case 1: 用户查询是产品名的一部分 (e.g., "芭乐" in "红心芭乐")
-            # 使用 config.MIN_SUBSTRING_MATCH_LENGTH (假设已在 config.py 定义, e.g., 2)
-            if query_lower in product_name_lower and len(query_lower) >= config.MIN_SUBSTRING_MATCH_LENGTH:
-                overlap_ratio = len(query_lower) / len(product_name_lower) if len(product_name_lower) > 0 else 0
-                score = 0.85 + 0.1 * overlap_ratio
-                direct_matches.append((key, min(score, 0.95)))
-                logger.debug(f"Direct match (query in product_name): query='{query_lower}', product='{product_name_lower}', score={min(score,0.95)}")
-                # 如果已经通过这种方式高分匹配，可以考虑将其作为强信号，但仍允许其他匹配类型
-            
-            # Case 2: 产品名是用户查询的一部分 (e.g., "苹果" in "苹果多少钱")
-            # 使用 config.MIN_PRODUCT_NAME_IN_QUERY_LENGTH (假设已在 config.py 定义, e.g., 2)
-            # 确保不与 Case 1 重复添加同一个 key 的匹配（如果 query_lower == product_name_lower）
-            # 通过 elif 避免，或者在添加前检查 key 是否已在 direct_matches 中
-            elif product_name_lower in query_lower and len(product_name_lower) >= config.MIN_PRODUCT_NAME_IN_QUERY_LENGTH:
-                # 检查是否已因 Case 1 添加，避免重复或低分覆盖高分
-                is_already_added_by_case1 = any(dm_key == key for dm_key, _ in direct_matches)
-                if not is_already_added_by_case1:
-                    direct_matches.append((key, 0.92))
-                    logger.debug(f"Direct match (product_name in query): product='{product_name_lower}', query='{query_lower}', score=0.92")
-
-            # Case 3: 关键词匹配
-            # 确保一个产品只因关键词匹配添加一次，即使匹配多个关键词
-            # 并且，如果已因产品名包含而高分匹配，关键词匹配的得分不应覆盖它，除非更高
-            matched_by_keyword_already = any(dm_key == key for dm_key, _ in direct_matches) # 简化：如果已添加，后续关键词不重复添加key
-            
-            if not matched_by_keyword_already:
-                for keyword in details.get('keywords', []):
-                    keyword_lower = keyword.lower()
-                    if keyword_lower in query_lower or query_lower in keyword_lower:
-                        kw_score = 0.80
-                        if query_lower == keyword_lower:
-                            kw_score = 0.88
-                        direct_matches.append((key, kw_score))
-                        logger.debug(f"Direct match (keyword): query/keyword='{query_lower}'/'{keyword_lower}', product_key='{key}', score={kw_score}")
-                        break # 一个产品匹配到一个关键词即可
+        # 权重配置，用于调整不同匹配算法的重要性
+        weights = {
+            'jaccard_name': 0.2,
+            'jaccard_keywords': 0.1,
+            'char_jaccard': 0.3,  # 增加字符匹配的权重
+            'levenshtein': 0.3,   # 增加编辑距离的权重
+            'pinyin': 0.1         # 降低拼音匹配的权重
+        }
         
-        # 如果有直接匹配结果，优先返回得分较高的
-        # 但不要在这里过早 return，允许后续模糊匹配补充或提升分数
-        # if direct_matches:
-        #     direct_matches.sort(key=lambda x: x[1], reverse=True)
-        #     if direct_matches[0][1] > 0.85: # 这个阈值可以调整或移除，让后续逻辑统一处理
-        #          # return direct_matches[:3] # 暂时注释掉这个提前返回
-
-        # 2. 综合多种模糊匹配策略
-        query_words = set(self._tokenize(query_lower))
+        # --- 修正：先清理文本，再计算奖励 ---
+        # 清理查询文本，移除标点符号和多余空格
+        query_text = re.sub(r'[^\w\s]', '', query_text).strip()
         
-        for key, details in self.product_catalog.items():
-            # 避免重复计算已在direct_matches中的高分项
-            if any(key == dm_key for dm_key, dm_score in direct_matches if dm_score > 0.8):
-                continue
-
-            product_name_lower = details['name'].lower()
-            product_pinyin_forms = details.get('pinyin_forms', self._get_pinyin_forms(product_name_lower)) # 兼容旧缓存
-            
-            # a. Jaccard 相似度 (名称和关键词)
-            product_name_words = set(self._tokenize(product_name_lower))
-            intersection_name = query_words.intersection(product_name_words)
-            union_name = query_words.union(product_name_words)
-            similarity_jaccard_name = len(intersection_name) / len(union_name) if union_name else 0
-            
-            similarity_jaccard_kw = 0
-            keywords_words = set()
-            for kw in details.get('keywords', []): keywords_words.update(self._tokenize(kw.lower()))
-            if keywords_words:
-                intersection_kw = query_words.intersection(keywords_words)
-                union_kw = query_words.union(keywords_words)
-                similarity_jaccard_kw = len(intersection_kw) / len(union_kw) if union_kw else 0
-
-            # b. 字符级别 Jaccard 相似度
-            chars_query = set(query_lower)
-            chars_product = set(product_name_lower)
-            intersection_chars = chars_query.intersection(chars_product)
-            similarity_char_jaccard = len(intersection_chars) / max(1, len(chars_query.union(chars_product)))
-
-
-            # c. Levenshtein 编辑距离相似度
-            max_len = max(len(query_lower), len(product_name_lower))
-            similarity_levenshtein = 0
-            if max_len > 0:
-                distance = Levenshtein.distance(query_lower, product_name_lower)
-                similarity_levenshtein = 1 - (distance / max_len)
-            
-            # d. 拼音相似度
-            similarity_pinyin = 0
-            product_py_flat = product_pinyin_forms.get('full_flat', '')
-            product_py_initials = product_pinyin_forms.get('initials', '')
-
-            if query_pinyin_flat and product_py_flat:
-                if query_pinyin_flat == product_py_flat:
-                    similarity_pinyin = max(similarity_pinyin, 0.85) # 完全匹配全拼
-                elif query_pinyin_flat in product_py_flat:
-                    similarity_pinyin = max(similarity_pinyin, 0.65 + 0.1 * (len(query_pinyin_flat) / len(product_py_flat)))
-                elif product_py_flat in query_pinyin_flat: # 查询拼音更长
-                     similarity_pinyin = max(similarity_pinyin, 0.6 + 0.1 * (len(product_py_flat) / len(query_pinyin_flat)))
-
-
-            if query_pinyin_initials and product_py_initials:
-                if query_pinyin_initials == product_py_initials:
-                    similarity_pinyin = max(similarity_pinyin, 0.7) # 完全匹配首字母
-                elif query_pinyin_initials in product_py_initials and len(query_pinyin_initials) > 1 : # 避免单个字母匹配
-                     similarity_pinyin = max(similarity_pinyin, 0.55 + 0.1 * (len(query_pinyin_initials) / len(product_py_initials)))
-
-
-            # 综合得分策略 (示例：取最大值，可调整权重)
-            # 字符Jaccard和Levenshtein对于中文错别字和顺序差异更敏感
-            # Jaccard词级别对于语序不敏感的关键词匹配有优势
-            # 拼音处理拼音输入
-            current_max_similarity = 0
-            scores = {
-                "jaccard_name": similarity_jaccard_name * 0.9, # 基础分
-                "jaccard_kw": similarity_jaccard_kw * 0.8,   # 关键词权重稍低
-                "char_jaccard": similarity_char_jaccard * 1.1, # 字符匹配权重稍高
-                "levenshtein": similarity_levenshtein * 1.2, # 编辑距离权重更高
-                "pinyin": similarity_pinyin * 1.0
-            }
-            
-            # 如果查询本身就是纯拼音（无汉字），提高拼音匹配的权重
-            if query_lower == query_pinyin_flat or query_lower == query_pinyin_initials:
-                scores["pinyin"] *= 1.3
-            
-            overall_similarity = max(scores.values())
-
-            # 之前直接包含匹配的得分也加入比较
-            for dm_key, dm_score in direct_matches:
-                if dm_key == key:
-                    overall_similarity = max(overall_similarity, dm_score)
-                    break
-
-            if overall_similarity >= threshold:
-                # 避免重复添加，如果已在direct_matches中，则更新分数（如果更高）
-                existing_match_index = -1
-                for i, (dm_k, _) in enumerate(direct_matches):
-                    if dm_k == key:
-                        existing_match_index = i
-                        break
-                if existing_match_index != -1:
-                    if overall_similarity > direct_matches[existing_match_index][1]:
-                        direct_matches[existing_match_index] = (key, overall_similarity)
-                else: # 否则作为新匹配添加
-                     partial_matches.append((key, overall_similarity))
-
-        # 合并 direct_matches 和 partial_matches，去重并排序
-        final_matches_dict = {key: score for key, score in direct_matches}
-        for key, score in partial_matches:
-            if key not in final_matches_dict or score > final_matches_dict[key]:
-                final_matches_dict[key] = score
+        # 特殊处理：如果查询是单个汉字，则优先考虑直接包含关系
+        exact_match_bonus = 0.5 if len(query_text) == 1 else 0.3
         
-        sorted_matches = sorted(final_matches_dict.items(), key=lambda item: item[1], reverse=True)
-        return sorted_matches
+        results = []
+        query_text_lower = query_text.lower()
+        
+        for product_key, product_details in self.product_catalog.items():
+            product_name = product_details.get('name', '')
+            product_original_name = product_details.get('original_display_name', product_name)
+            product_name_lower = product_name.lower()
+            
+            # 计算各种相似度指标
+            jaccard_name_score = self._jaccard_similarity(query_text_lower, product_name_lower)
+            
+            # 关键词匹配
+            product_keywords = product_details.get('keywords', [])
+            jaccard_kw_score = self._jaccard_similarity_lists(query_text_lower.split(), product_keywords)
+            
+            # 字符级别的Jaccard相似度
+            char_jaccard_score = self._character_jaccard_similarity(query_text, product_name)
+            
+            # Levenshtein编辑距离相似度
+            levenshtein_score = self._levenshtein_similarity(query_text, product_name)
+            
+            # 拼音相似度
+            pinyin_score = self._pinyin_similarity(query_text, product_name)
+            
+            # 调试输出
+            if "芭乐" in product_original_name and "芭乐" in query_text: # 更具体的日志条件
+                logger.info(f"--- DETAILED DEBUG for '芭乐' MATCH ---")
+                logger.info(f"  Query: '{query_text}' vs Product: '{product_original_name}' (Key: '{product_key}')")
+                logger.info(f"    Raw Jaccard Name: {jaccard_name_score:.4f}")
+                logger.info(f"    Raw Jaccard KW: {jaccard_kw_score:.4f} (Keywords: {product_keywords})")
+                logger.info(f"    Raw Char Jaccard: {char_jaccard_score:.4f}")
+                logger.info(f"    Raw Levenshtein: {levenshtein_score:.4f}")
+                logger.info(f"    Raw Pinyin: {pinyin_score:.4f}")
+                logger.info(f"    Weighted Jaccard Name: {jaccard_name_score * weights['jaccard_name']:.4f}")
+                logger.info(f"    Weighted Jaccard KW: {jaccard_kw_score * weights['jaccard_keywords']:.4f}")
+                logger.info(f"    Weighted Char Jaccard: {char_jaccard_score * weights['char_jaccard']:.4f}")
+                logger.info(f"    Weighted Levenshtein: {levenshtein_score * weights['levenshtein']:.4f}")
+                logger.info(f"    Weighted Pinyin: {pinyin_score * weights['pinyin']:.4f}")
+            else:
+                logger.debug(f"--- Debug Scores for Product KEY: '{product_key}', NAME: '{product_original_name}' vs Query: '{query_text}' ---")
+                logger.debug(f"  Jaccard Name: {jaccard_name_score * weights['jaccard_name']:.4f} (Raw Score: {jaccard_name_score:.4f})")
+                logger.debug(f"  Jaccard KW: {jaccard_kw_score * weights['jaccard_keywords']:.4f} (Raw Score: {jaccard_kw_score:.4f})")
+                logger.debug(f"  Char Jaccard: {char_jaccard_score * weights['char_jaccard']:.4f} (Raw Score: {char_jaccard_score:.4f})")
+                logger.debug(f"  Levenshtein: {levenshtein_score * weights['levenshtein']:.4f} (Raw Score: {levenshtein_score:.4f})")
+                logger.debug(f"  Pinyin: {pinyin_score * weights['pinyin']:.4f} (Raw Score: {pinyin_score:.4f})")
+            
+            # 计算加权得分
+            weighted_scores = [
+                jaccard_name_score * weights['jaccard_name'],
+                jaccard_kw_score * weights['jaccard_keywords'],
+                char_jaccard_score * weights['char_jaccard'],
+                levenshtein_score * weights['levenshtein'],
+                pinyin_score * weights['pinyin']
+            ]
+            
+            # 取最高分
+            max_score = max(weighted_scores)
+            
+            # 特殊处理：如果查询文本直接包含在产品名称中，给予额外加分
+            exact_match_applied_log = ""
+            if query_text_lower in product_name_lower: # 使用小写进行包含检查
+                max_score += exact_match_bonus
+                max_score = min(max_score, 1.0)  # 确保分数不超过1
+                exact_match_applied_log = f" (Exact match bonus {exact_match_bonus} applied, new score: {max_score:.4f})"
+            
+            if "芭乐" in product_original_name and "芭乐" in query_text:
+                logger.info(f"    Max Score from components: {max_score:.4f}{exact_match_applied_log}")
+                logger.info(f"    Final Overall Similarity for KEY: '{product_key}': {max_score:.4f} (Threshold: {threshold})")
+
+            if max_score >= threshold:
+                results.append((product_key, max_score))
+            
+            if not ("芭乐" in product_original_name and "芭乐" in query_text): # 避免重复记录普通debug日志
+                logger.debug(f"  Max Score from components: {max_score:.4f}{exact_match_applied_log}")
+                logger.debug(f"  Final Overall Similarity for KEY: '{product_key}': {max_score:.4f} (Threshold: {threshold})")
+                
+        # 按相似度降序排序
+        results.sort(key=lambda x: x[1], reverse=True)
+        
+        # 优先返回真正相关的产品（如查询"鸡"时返回含"鸡"的产品）
+        if len(query_text) == 1:
+            # 对于单字查询，将直接包含该字的产品排在前面
+            exact_matches = [(k, s) for k, s in results if query_text in self.product_catalog[k].get('name', '')]
+            other_matches = [(k, s) for k, s in results if query_text not in self.product_catalog[k].get('name', '')]
+            results = exact_matches + other_matches
+        
+        for key, score in results:
+            logger.debug(f"找到匹配产品: {self.product_catalog[key].get('name', key)}, 得分: {score}")
+            
+        logger.info(f"find_similar_products: 为查询 '{query_text}' 找到 {len(results)} 个相似产品")
+        return results
     
     def find_related_category(self, query_text):
         """根据用户查询文本尝试推断相关的产品类别
@@ -656,43 +599,141 @@ class ProductManager:
 
         return 1
 
-    def find_similar_products(self, query_string: str, threshold: float = 0.7):
+    def find_similar_products(self, query_string: str, threshold: float = 0.3):
         """
         根据查询字符串查找相似的产品。
         利用 fuzzy_match_product 进行更稳健的匹配。
 
         Args:
             query_string (str): 用户的模糊查询字符串。
-            threshold (float): 相似度阈值，传递给 fuzzy_match_product。
+            threshold (float): 相似度阈值，默认降低到0.3以便捕获更多潜在匹配。
 
         Returns:
-            list: 包含相似产品显示名称的列表。
+            list: 包含(product_key, product_details)元组的列表。
         """
-        similar_product_names = []
+        similar_products = []
         if not query_string or not self.product_catalog:
             logger.debug("find_similar_products: 空查询或空产品目录，返回空列表。")
-            return similar_product_names
+            return similar_products
 
         logger.debug(f"find_similar_products: 查询='{query_string}', 阈值={threshold}")
 
         # 调用现有的更复杂的模糊匹配函数
-        # fuzzy_match_product 返回 (product_key, score) 列表，已按score排序
-        # 并且其内部已使用 threshold 过滤 (基于其参数 threshold)
         matched_products_with_scores = self.fuzzy_match_product(query_text=query_string, threshold=threshold)
         
-        logger.debug(f"find_similar_products: fuzzy_match_product 返回 {len(matched_products_with_scores)} 个匹配项: {matched_products_with_scores}")
-
-        for product_key, score in matched_products_with_scores:
-            # fuzzy_match_product 内部已经根据其 threshold 参数进行了筛选。
-            # 此处的 threshold (find_similar_products的参数) 已传递给 fuzzy_match_product。
-            product_details = self.product_catalog.get(product_key)
-            if product_details:
-                # 使用 original_display_name 以获得包含规格的完整名称（如果适用）
-                display_name = product_details.get('original_display_name', product_details.get('name'))
-                if display_name and display_name not in similar_product_names: # 确保名称存在且不重复添加
-                    similar_product_names.append(display_name)
-            else:
-                logger.warning(f"find_similar_products: 无法从产品目录中找到 key='{product_key}' 的产品详情。")
+        # 对匹配结果按相似度得分降序排序
+        matched_products_with_scores.sort(key=lambda x: x[1], reverse=True)
         
-        logger.info(f"find_similar_products: 为查询 '{query_string}' 找到 {len(similar_product_names)} 个相似产品: {similar_product_names}")
-        return similar_product_names
+        # 转换为期望的返回格式
+        for product_key, score in matched_products_with_scores:
+            if product_key in self.product_catalog:
+                similar_products.append((product_key, self.product_catalog[product_key]))
+                logger.debug(f"找到匹配产品: {product_key}, 得分: {score}")
+
+        logger.info(f"find_similar_products: 为查询 '{query_string}' 找到 {len(similar_products)} 个相似产品")
+        return similar_products
+
+    def get_product_categories(self):
+        """
+        获取所有产品分类。
+        """
+        return {
+            "禽类": ["鸡", "鸭", "鹅", "鸽子", "母鸡", "公鸡", "童子鸡", "土鸡", "走地鸡", "松母鸡", "鸡肉", "鸭肉", "鹅肉"],
+            "肉类": ["猪肉", "牛肉", "羊肉", "肉"],
+            "海鲜": ["鱼", "虾", "蟹", "贝", "海鲜", "蝦餃"],
+            "蔬菜": ["青菜", "西兰花", "菠菜", "茄子", "青江菜", "西兰花苔", "茭白", "嫩菠菜"],
+            "水果": ["苹果", "香蕉", "橙子", "梨", "奇异果", "芭乐"],
+            "点心": ["包子", "饺子", "馄饨", "笋饼", "糕点", "生煎包", "火燒", "水饺"],
+            "其他": ["调味料", "饮品", "零食", "意大利面", "筋道", "泡椒", "姜"]
+        }
+
+    def categorize_product(self, product_name: str) -> str:
+        """
+        根据产品名称判断其所属分类。
+        
+        Args:
+            product_name: 产品名称
+            
+        Returns:
+            str: 产品分类名称
+        """
+        if not product_name:
+            return "其他"
+            
+        categories = self.get_product_categories()
+        product_name_lower = product_name.lower()
+        
+        # 特殊处理：如果产品名称是"鸡"，直接返回"禽类"
+        if product_name == "鸡":
+            logger.debug(f"产品 '{product_name}' 直接匹配到分类: 禽类")
+            return "禽类"
+        
+        # 首先尝试精确匹配产品名称中的关键词
+        for category, keywords in categories.items():
+            for keyword in keywords:
+                if keyword in product_name_lower:
+                    logger.debug(f"产品 '{product_name}' 通过关键词 '{keyword}' 匹配到分类: {category}")
+                    return category
+        
+        # 如果是单字查询（如"鸡"），特殊处理
+        if len(product_name) == 1:
+            if product_name in "鸡鸭鹅":
+                return "禽类"
+            elif product_name in "猪牛羊肉":
+                return "肉类"
+            elif product_name in "鱼虾蟹":
+                return "海鲜"
+                    
+        # 如果没有找到匹配的关键词，返回"其他"分类
+        logger.debug(f"产品 '{product_name}' 未找到匹配分类，归入'其他'类别")
+        return "其他"
+
+    def _jaccard_similarity(self, str1: str, str2: str) -> float:
+        """计算两个字符串的Jaccard相似度"""
+        set1 = set(str1)
+        set2 = set(str2)
+        intersection = len(set1.intersection(set2))
+        union = len(set1.union(set2))
+        return intersection / union if union > 0 else 0
+
+    def _jaccard_similarity_lists(self, list1: List[str], list2: List[str]) -> float:
+        """计算两个列表的Jaccard相似度"""
+        set1 = set(list1)
+        set2 = set(list2)
+        intersection = len(set1.intersection(set2))
+        union = len(set1.union(set2))
+        return intersection / union if union > 0 else 0
+
+    def _character_jaccard_similarity(self, str1: str, str2: str) -> float:
+        """计算两个字符串的字符级Jaccard相似度"""
+        chars1 = set(str1)
+        chars2 = set(str2)
+        intersection = len(chars1.intersection(chars2))
+        union = len(chars1.union(chars2))
+        return intersection / union if union > 0 else 0
+
+    def _levenshtein_similarity(self, str1: str, str2: str) -> float:
+        """
+        使用 Levenshtein 库计算两个字符串的相似度。
+        返回一个 0 到 1 之间的浮点数，1 表示完全相同。
+        """
+        if not str1 and not str2:
+            return 1.0
+        if not str1 or not str2:
+            # 如果其中一个为空，则相似度为0，除非另一个也为空（已处理）
+            return 0.0
+        return Levenshtein.ratio(str1, str2)
+
+    def _pinyin_similarity(self, str1: str, str2: str) -> float:
+        """计算两个字符串的拼音相似度"""
+        try:
+            from pypinyin import lazy_pinyin
+            # 转换为拼音
+            pinyin1 = ' '.join(lazy_pinyin(str1))
+            pinyin2 = ' '.join(lazy_pinyin(str2))
+            
+            # 计算拼音的Levenshtein相似度
+            return self._levenshtein_similarity(pinyin1, pinyin2)
+        except ImportError:
+            logger.warning("pypinyin module not found, pinyin similarity calculation skipped")
+            return 0.0

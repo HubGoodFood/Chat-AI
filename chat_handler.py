@@ -230,7 +230,8 @@ class ChatHandler:
 
         # 检查是否是价格查询或购买意图
         if (any(keyword in user_input_processed for keyword in config.PRICE_QUERY_KEYWORDS) or
-            any(keyword in user_input_processed for keyword in config.BUY_INTENT_KEYWORDS)):
+            any(keyword in user_input_processed for keyword in config.BUY_INTENT_KEYWORDS) or
+            any(keyword in user_input_processed for keyword in config.GENERAL_QUERY_KEYWORDS)):
             return 'price_or_buy'
         
         # 如果输入中直接包含可匹配的产品名称或关键词，也视为价格查询
@@ -243,63 +244,172 @@ class ChatHandler:
         
         return 'unknown'
         
-    def handle_quantity_follow_up(self, user_input_processed: str, user_id: str) -> Tuple[Optional[str], Optional[str], Optional[Dict], Optional[Dict]]:
-        """处理用户在提及一个产品后，仅用数量进行追问的场景。
-        
-        Args:
-            user_input_processed (str): 处理过的用户输入（小写）。
-            user_id (str): 用户ID。
+    def handle_chat_message(self, user_input: str, user_id: str) -> Union[str, Dict, None]:
+        """处理用户的聊天消息"""
+        if not user_input or not user_input.strip():
+            return "抱歉，我没有听清您说什么。请再说一遍。"
 
-        Returns:
-            Tuple: (response_str, new_general_context_key, new_general_context_details, new_bot_mention_payload)
-        """
+        # 获取用户会话和上下文信息
         session = self.get_user_session(user_id)
-        last_product_key = session.get('last_product_key')
-        
-        response_str: Optional[str] = None
-        new_general_context_key: Optional[str] = last_product_key # Default to existing
-        new_general_context_details: Optional[Dict] = session.get('last_product_details')
-        new_bot_mention_payload: Optional[Dict] = None
+        last_bot_mentioned_payload = session.get('last_bot_mentioned_product_payload')
 
-        quantity_follow_up_match = re.fullmatch(
-            r'\s*([\d一二三四五六七八九十百千万俩两]+)\s*(份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*(?:呢|呀|啊|吧|多少钱|总共)?\s*',
-            user_input_processed
-        )
-        
-        if quantity_follow_up_match and last_product_key:
-            logger.info(f"Detected quantity follow-up for product: {last_product_key}")
-            try:
-                quantity_str = quantity_follow_up_match.group(1)
-                try:
-                    quantity = int(quantity_str)
-                except ValueError:
-                    quantity = self.product_manager.convert_chinese_number_to_int(quantity_str)
+        # 1. 检查是否是来自前端按钮的直接产品选择
+        if user_input.startswith("product_selection:"):
+            # 规范化从前端收到的key：去除首尾空格并转为小写
+            product_key = user_input.split(":", 1)[1].strip().lower()
+            logger.info(f"处理来自按钮的产品选择，规范化后的key: '{product_key}'")
+            
+            # 修正错误：直接从 product_catalog 字典中获取产品信息
+            product_details = self.product_manager.product_catalog.get(product_key)
+            
+            if product_details:
+                # 构建一个丰富、详细的回复
+                response_parts = []
+                product_name_display = product_details.get('original_display_name', product_details.get('name', '这款产品'))
+
+                # 问候语
+                greeting = random.choice([
+                    f"好的，我们来看看「{product_name_display}」的详细信息：",
+                    f"您选择了「{product_name_display}」，这是一个很棒的选择！",
+                    f"「{product_name_display}」，为您介绍一下："
+                ])
+                response_parts.append(greeting)
+
+                # 价格和规格
+                price_info = f"价格是 ${product_details.get('price', 0):.2f}/{product_details.get('specification', 'N/A')}。"
+                response_parts.append(price_info)
+
+                # 其他详细信息
+                details_map = {
+                    'category': ("它属于我们的「{}」系列。", "这是我们「{}」分类中的精品。"),
+                    'taste': ("说到口感，它{}，很多顾客都特别喜欢！", "这款产品的口感特点是{}，非常独特。"),
+                    'origin': ("它来自{}，保证新鲜优质。", "产地是{}，品质有保障。"),
+                    'benefits': ("对健康的好处包括：{}。", "它的营养价值很高，特别是{}。"),
+                    'suitablefor': ("特别推荐给{}。", "很适合{}享用。"),
+                    'description': ("另外，{}", "补充一点，{}")
+                }
+                for detail_key, phrases in details_map.items():
+                    value = product_details.get(detail_key)
+                    if value:
+                        response_parts.append(random.choice(phrases).format(value))
                 
-                product_details = self.product_manager.product_catalog.get(last_product_key)
-                if product_details:
-                    item_price = product_details['price']
-                    original_display_name = product_details['original_display_name']
-                    original_unit_desc = product_details['specification']
-                    item_total = quantity * item_price
-                    
-                    response_str = f"好的，{quantity} ({original_unit_desc}) 的 {original_display_name} 总共是 ${item_total:.2f}。"
-                    new_general_context_key = last_product_key
-                    new_general_context_details = product_details
-                    # Bot is confirming/mentioning this product
-                    new_bot_mention_payload = {
-                        'key': last_product_key,
-                        'name': product_details.get('original_display_name') or product_details.get('name'),
-                        'price': product_details.get('price'),
-                        'specification': product_details.get('specification'),
-                        'description': product_details.get('description')
+                # 关键词
+                keywords = product_details.get('keywords', [])
+                if keywords:
+                    keywords_str = "、".join(keywords)
+                    response_parts.append(f"它的特点可以概括为：{keywords_str}。")
+
+                # 结束语
+                closing = random.choice([
+                    "\n您有什么其他问题，或者需要了解其他产品吗？",
+                    "\n需要我为您推荐搭配的其他商品吗？",
+                    "\n还有其他想了解的吗？随时告诉我哦！"
+                ])
+                response_parts.append(closing)
+                
+                final_response = "\n".join(response_parts)
+                
+                # 更新会话上下文并增加产品热度
+                self.update_user_session(user_id, query=user_input, product_key=product_key, product_details=product_details)
+                self.product_manager.update_product_popularity(product_key)
+                return final_response
+            else:
+                logger.error(f"产品选择失败：在目录中未找到key为 '{product_key}' 的产品。")
+                return "抱歉，查找您选择的产品信息时出了一点问题，请稍后再试。"
+
+        # 2. (原步骤1) 预处理用户输入，处理追问等
+        user_input_processed, user_input_original = self.preprocess_user_input(user_input, user_id)
+
+        # 3. (原步骤2) 识别用户意图
+        intent = self.detect_intent(user_input_processed)
+        logger.debug(f"用户 '{user_id}' 的意图被识别为: {intent}")
+
+        # 3. 根据意图分发到不同的处理函数
+        final_response = None
+        extracted_product_payload = None # 用于存储从回复中提取的产品信息
+
+        if intent == 'identity_query':
+            final_response = "我是一个由 DeepSeek-V2 模型驱动的智能客服机器人，专门为您提供生鲜产品信息和推荐服务。"
+
+        elif intent == 'quantity_follow_up':
+            final_response, product_key, product_details, _ = self.handle_quantity_follow_up(user_input_processed, user_id)
+            if product_key and product_details:
+                self.update_user_session(user_id, query=user_input_original, product_key=product_key, product_details=product_details)
+
+        elif intent == 'what_do_you_sell':
+            final_response = self.handle_what_do_you_sell()
+
+        elif intent == 'recommendation':
+            # handle_recommendation 现在返回一个包含 'message' 和 'product_suggestions' 的字典
+            recommendation_result = self.handle_recommendation(user_input_processed, user_id)
+            final_response = recommendation_result # 这将是一个字典
+            # extracted_product_payload 的逻辑将在下面处理 product_suggestions 时更新
+            if recommendation_result.get("product_suggestions"):
+                first_suggestion = recommendation_result["product_suggestions"][0]
+                product_details_for_payload = self.product_manager.get_product_details_by_key(first_suggestion.get('payload'))
+                if product_details_for_payload:
+                    extracted_product_payload = {
+                        'key': first_suggestion.get('payload'),
+                        'name': product_details_for_payload.get('original_display_name') or product_details_for_payload.get('name'),
+                        'price': product_details_for_payload.get('price'),
+                        'specification': product_details_for_payload.get('specification'),
+                        'description': product_details_for_payload.get('description')
                     }
-                    self.product_manager.update_product_popularity(last_product_key)
-                else:
-                    logger.error(f"last_identified_product_key '{last_product_key}' not found in PRODUCT_CATALOG.")
-            except Exception as e:
-                logger.error(f"处理数量追问时出错: {e}")
+
+        elif intent == 'recommendation_follow_up':
+            # handle_recommendation 现在返回一个包含 'message' 和 'product_suggestions' 的字典
+            recommendation_result_follow_up = self.handle_recommendation(user_input_processed, user_id, direct_category="其他")
+            final_response = recommendation_result_follow_up
+            if recommendation_result_follow_up.get("product_suggestions"):
+                first_suggestion_fu = recommendation_result_follow_up["product_suggestions"][0]
+                product_details_for_payload_fu = self.product_manager.get_product_details_by_key(first_suggestion_fu.get('payload'))
+                if product_details_for_payload_fu:
+                     extracted_product_payload = { # 更新 extracted_product_payload
+                        'key': first_suggestion_fu.get('payload'),
+                        'name': product_details_for_payload_fu.get('original_display_name') or product_details_for_payload_fu.get('name'),
+                        'price': product_details_for_payload_fu.get('price'),
+                        'specification': product_details_for_payload_fu.get('specification'),
+                        'description': product_details_for_payload_fu.get('description')
+                    }
+
+        elif intent == 'policy_question':
+            final_response = self.handle_policy_question(user_input_processed)
+
+        elif intent == 'price_or_buy':
+            response, session_updated, product_key, product_details = self.handle_price_or_buy(user_input_processed, user_input_original, user_id, last_bot_mentioned_payload)
+            if not session_updated and product_key: # 如果handle_price_or_buy内部没有更新会话
+                self.update_user_session(user_id, query=user_input_original, product_key=product_key, product_details=product_details)
+            final_response = response
         
-        return response_str, new_general_context_key, new_general_context_details, new_bot_mention_payload
+        # 4. 如果没有特定意图，使用 LLM 进行兜底
+        if final_response is None:
+            logger.info(f"没有明确的意图匹配，为查询 '{user_input_original}' 启动 LLM 兜底。")
+            final_response, extracted_product_payload = self.handle_llm_fallback(user_input, user_input_processed, user_id)
+
+        # 5. 更新会话中机器人提及的产品信息
+        # 注意：如果 final_response 是一个 dict (带有按钮)，我们需要从中提取信息
+        if isinstance(final_response, dict) and "product_suggestions" in final_response:
+             # 如果有多个建议，只记录第一个作为上下文
+            if final_response["product_suggestions"]:
+                first_suggestion_payload_str = final_response["product_suggestions"][0].get('payload')
+                if first_suggestion_payload_str:
+                    # Payload 存储的是产品key，我们需要产品详情
+                    product_details_for_payload = self.product_manager.get_product_details_by_key(first_suggestion_payload_str)
+                    if product_details_for_payload:
+                         bot_mentioned_payload = {
+                            'key': first_suggestion_payload_str,
+                            'name': product_details_for_payload.get('original_display_name') or product_details_for_payload.get('name'),
+                            'price': product_details_for_payload.get('price'),
+                            'specification': product_details_for_payload.get('specification')
+                        }
+                         self.update_user_session(user_id, bot_mentioned_product_payload_update=bot_mentioned_payload)
+        elif extracted_product_payload: # 如果LLM回复中提取了产品信息
+            self.update_user_session(user_id, bot_mentioned_product_payload_update=extracted_product_payload)
+        else:
+             # 如果没有新的产品被提及，清除上一轮的记录
+            self.update_user_session(user_id, bot_mentioned_product_payload_update=None)
+            
+        return final_response
 
     def handle_what_do_you_sell(self) -> str:
         """处理用户询问"你们卖什么"或类似请求。
@@ -341,7 +451,7 @@ class ChatHandler:
         else: 
             return "抱歉，我们的产品列表暂时还没有加载好。"
 
-    def handle_recommendation(self, user_input_processed: str, user_id: str, direct_category: Optional[str] = None) -> Tuple[str, Optional[Dict]]:
+    def handle_recommendation(self, user_input_processed: str, user_id: str, direct_category: Optional[str] = None) -> Dict[str, Any]:
         """处理用户的产品推荐请求。
         Args:
             user_input_processed (str): 处理过的用户输入（小写）。
@@ -349,14 +459,16 @@ class ChatHandler:
             direct_category (Optional[str], optional): 直接指定的目标类别. Defaults to None.
 
         Returns:
-            Tuple[str, Optional[Dict]]: (回复字符串, new_bot_mention_payload)
+            Dict[str, Any]: 包含 'message' (str) 和 'product_suggestions' (list of dict) 的字典。
+                           product_suggestions 中的每个字典包含 'display_text' 和 'payload'。
         """
-        response_str: str
-        new_bot_mention_payload: Optional[Dict] = None
+        response_message: str
+        product_suggestions_list: list = []
+        # new_bot_mention_payload 的逻辑将通过 product_suggestions 的第一个元素来处理
 
         if not self.product_manager.product_catalog:
-            response_str = "我们的产品正在准备中，暂时无法为您推荐，非常抱歉！"
-            return response_str, new_bot_mention_payload
+            response_message = "我们的产品正在准备中，暂时无法为您推荐，非常抱歉！"
+            return {"message": response_message, "product_suggestions": product_suggestions_list}
 
         target_category = None
         if direct_category:
@@ -444,37 +556,38 @@ class ChatHandler:
 
 
         if recommended_products:
-            final_recommendations = recommended_products[:3]
+            final_recommendations = recommended_products[:config.MAX_PRODUCT_SUGGESTIONS_BUTTONS] # 使用配置的最大按钮数
             for i, (key, details, tag) in enumerate(final_recommendations):
+                # 构建按钮的显示文本
+                button_display_text = f"{details.get('original_display_name', details.get('name', '未知产品'))} (${details.get('price', 0):.2f})"
+                product_suggestions_list.append({
+                    "display_text": button_display_text,
+                    "payload": key # payload 是产品键，用于后续处理
+                })
+
+                # 构建回复消息中的产品描述部分
                 base_display_info = f"{details.get('original_display_name', details.get('name', '未知产品'))}: ${details.get('price', 0):.2f}/{details.get('specification', 'N/A')}"
                 description = details.get('description', '')
                 if description: base_display_info += f" - {description}"
+                
                 explanation = ""
                 if tag == "当季新鲜": explanation = " (这款是当季的，保证新鲜！😋)"
                 elif tag == "热门好评": explanation = " (这款特别受欢迎，很多朋友都推荐！👍)"
                 elif tag == "精选": explanation = " (这是我们为您精心挑选的优质品！✨)"
-                elif tag in ["为您优选", "当季推荐", "热门单品"] and tag: explanation = f" ({tag}！)"
+                elif tag in ["为您优选", "当季推荐", "热门单品", "为您甄选", "当季鲜品", "人气好物"] and tag: explanation = f" ({tag}！)"
                 response_parts.append(f"- {base_display_info}{explanation if explanation else ''}")
                 self.product_manager.update_product_popularity(key)
 
-                # Set the first recommended product as the bot-mentioned product for context
-                if i == 0: # Take the first one as the primary mention
-                    new_bot_mention_payload = {
-                        'key': key,
-                        'name': details.get('original_display_name') or details.get('name'),
-                        'price': details.get('price'),
-                        'specification': details.get('specification'),
-                        'description': details.get('description')
-                    }
-            response_parts.append("\n您对哪个感兴趣，想了解更多，还是需要其他推荐？")
+            if product_suggestions_list:
+                 response_parts.append("\n您可以点击上面的产品按钮直接选择，或者告诉我您对哪个感兴趣，想了解更多，还是需要其他推荐？")
+            else: # 如果没有生成任何按钮（理论上不应该发生，因为前面有fallback）
+                 response_parts.append("\n您对哪个感兴趣，想了解更多，还是需要其他推荐？")
         else:
             response_parts.append("我们的产品正在精心准备中，暂时无法为您提供具体推荐，非常抱歉！")
         
-        response_str = "\n".join(response_parts)
+        response_message = "\n".join(response_parts)
         
-        # context_updates for last_recommendation_category is handled by handle_chat_message if needed
-        # This function now primarily returns the response and any bot mention.
-        return response_str, new_bot_mention_payload
+        return {"message": response_message, "product_suggestions": product_suggestions_list}
 
     def handle_policy_question(self, user_input_processed: str) -> Optional[str]:
         """根据用户输入，使用语义搜索返回相关的政策语句。"""
@@ -660,7 +773,26 @@ class ChatHandler:
             is_buy_action = any(keyword in user_input_processed for keyword in config.BUY_INTENT_KEYWORDS)
             is_price_action = any(keyword in user_input_processed for keyword in config.PRICE_QUERY_KEYWORDS)
 
-            possible_matches = self.product_manager.fuzzy_match_product(user_input_processed)
+            # --- 核心修改：在模糊匹配前清洗查询语句 ---
+            query_for_matching = user_input_processed
+            # 从config中获取所有需要剔除的词
+            all_stopwords = (config.PRICE_QUERY_KEYWORDS + 
+                             config.BUY_INTENT_KEYWORDS + 
+                             config.GENERAL_QUERY_KEYWORDS +
+                             ["你们", "我们", "我", "你", "他", "她", "它", "的", "地", "得", "了", "着", "过", "吗", "呢", "吧", "呀", "啊", "什么", "是", "不是", "想", "要", "请问", "那个", "这个"])
+            
+            for stopword in set(all_stopwords):
+                query_for_matching = query_for_matching.replace(stopword, '')
+            query_for_matching = query_for_matching.strip()
+            
+            # 如果清洗后查询为空（例如，用户只说了"多少钱"），则使用原始输入进行后续处理
+            if not query_for_matching:
+                query_for_matching = user_input_processed
+            
+            logger.debug(f"清洗后的查询，用于模糊匹配: '{query_for_matching}'")
+            # --- 修改结束 ---
+
+            possible_matches = self.product_manager.fuzzy_match_product(query_for_matching) # 使用清洗后的查询
             acceptable_matches = [(key, score) for key, score in possible_matches if score >= config.MIN_ACCEPTABLE_MATCH_SCORE]
 
             if not acceptable_matches:
@@ -681,33 +813,46 @@ class ChatHandler:
                 acceptable_matches.sort(key=lambda x: x[1], reverse=True)
                 top_match_key, top_score = acceptable_matches[0]
                 
+                # --- 新的澄清逻辑 ---
+                # 默认进行澄清，除非我们非常确定只有一个最佳匹配
+                needs_clarification = True
+
+                if len(acceptable_matches) <= 1:
+                    # 如果只有一个或没有可接受的匹配项，则无需澄清
+                    needs_clarification = False
+                else: # 有多个匹配项
+                    top_score = acceptable_matches[0][1]
+                    second_score = acceptable_matches[1][1]
+                    
+                    # 仅当最高分非常高（例如 > 0.9）且远超第二名时，才跳过澄清
+                    if top_score > 0.9 and top_score > second_score * 1.5:
+                        needs_clarification = False
+                
                 clarification_candidates = []
-                added_candidate_names = set()
-                for key, score in acceptable_matches:
-                    if len(clarification_candidates) >= config.MAX_CLARIFICATION_OPTIONS: break
-                    if score >= config.PRICE_OR_BUY_CLARIFICATION_CANDIDATE_THRESHOLD:
+                if needs_clarification:
+                    # 从 acceptable_matches 构建澄清候选项
+                    added_candidate_display_names = set()
+                    for key, score in acceptable_matches:
+                        if len(clarification_candidates) >= config.MAX_CLARIFICATION_OPTIONS: break
+                        
                         product_details_cand = self.product_manager.product_catalog.get(key)
                         if product_details_cand:
-                            product_name_for_clar = product_details_cand['name']
-                            if product_name_for_clar not in added_candidate_names:
+                            # 使用 original_display_name 来避免合并不同规格的同名产品
+                            product_display_name = product_details_cand['original_display_name']
+                            if product_display_name not in added_candidate_display_names:
                                 clarification_candidates.append((key, product_details_cand, score))
-                                added_candidate_names.add(product_name_for_clar)
-                
-                needs_clarification = False
-                if len(clarification_candidates) > 1:
-                    if top_score < config.DOMINANT_MATCH_THRESHOLD:
-                        if len(clarification_candidates) > 1 and (top_score - clarification_candidates[1][2]) < config.SIGNIFICANT_SCORE_DIFFERENCE:
-                            needs_clarification = True
-                    if len(set(c[1]['name'] for c in clarification_candidates)) > 1:
-                         needs_clarification = True
-                if len(clarification_candidates) <= 1 or top_score >= config.DOMINANT_MATCH_THRESHOLD:
-                    needs_clarification = False
-                if len(clarification_candidates) > 1 and clarification_candidates[0][1]['name'] == clarification_candidates[1][1]['name']:
-                    needs_clarification = False
+                                added_candidate_display_names.add(product_display_name)
+                    
+                    # 如果过滤后（例如，所有匹配都是同一产品的不同规格）只剩一个或没有候选项，则也不需要澄清
+                    if len(clarification_candidates) <= 1:
+                        needs_clarification = False
 
                 if needs_clarification:
                     clarification_options_list = [{"display_text": dtls['original_display_name'], "payload": k} for k, dtls, _ in clarification_candidates]
-                    final_response = {"message": "请问您指的是以下哪种产品？", "clarification_options": clarification_options_list}
+                    # 构建更友好的提问消息
+                    product_names_for_clarification = "、".join([f"[{opt['display_text']}]" for opt in clarification_options_list])
+                    clarification_message = f"您好，关于您咨询的产品，我找到了几个相似的：您是指 {product_names_for_clarification} 呢？请点击选择。"
+                    final_response = {"message": clarification_message, "clarification_options": clarification_options_list}
                     new_general_context_key = None
                     new_bot_mention_payload_for_next_turn = None # Clarification awaits user, no bot mention yet
                     intent_handled = True
@@ -744,26 +889,115 @@ class ChatHandler:
                         
                         self.product_manager.update_product_popularity(top_match_key)
 
-                        if weight_only_query:
-                            response_parts = [f"{self.product_manager.format_product_display(product_details)} 的规格重量如您所见。"]
-                            response_parts.append(f"单价是 ${product_details['price']:.2f}/{product_details['specification']}。")
-                            final_response = "\n".join(response_parts)
-                        elif price_only_query or (is_price_action and not is_buy_action):
-                            base_info = self.product_manager.format_product_display(product_details)
-                            final_response = f"{base_info.split(':')[0]} 的价格是 ${product_details['price']:.2f}/{product_details['specification']}。"
-                            if product_details.get('description'):
-                                final_response += f"\n\n{product_details['description']}"
-                        elif is_buy_action:
-                            response_parts = ["好的，这是您的订单详情："]
-                            formatted_name_price_spec = self.product_manager.format_product_display(product_details).split(' - ')[0]
-                            response_parts.append(f"- {formatted_name_price_spec} x {quantity} = ${item_total:.2f}")
-                            response_parts.append(f"\n总计：${item_total:.2f}")
-                            final_response = "\n".join(response_parts)
-                        else: # Default: fuzzy query a product name, give price
-                             base_info = self.product_manager.format_product_display(product_details)
-                             final_response = f"{base_info.split(':')[0]} 的价格是 ${product_details['price']:.2f}/{product_details['specification']}。"
-                             if product_details.get('description'):
-                                 final_response += f"\n\n{product_details['description']}"
+                        # 构建包含所有产品信息的自然回复
+                        response_parts = []
+                        product_name_display = product_details.get('original_display_name', product_details.get('name', '这款产品'))
+
+                        # 使用更自然的问候语开头
+                        greeting_options = [
+                            f"太好了！您选择的「{product_name_display}」真的很不错呢！",
+                            f"好的，「{product_name_display}」是个很棒的选择！",
+                            f"您挑选的「{product_name_display}」非常受欢迎呢！"
+                        ]
+                        response_parts.append(random.choice(greeting_options))
+                        
+                        # 价格信息
+                        price_phrases = [
+                            f"它的价格是每{product_details.get('unit', '份')} ${product_details.get('price', '未知'):.2f}，规格是{product_details.get('specification', '未注明')}。",
+                            f"现在售价是 ${product_details.get('price', '未知'):.2f}/{product_details.get('specification', '未注明')}。"
+                        ]
+                        response_parts.append(random.choice(price_phrases))
+                        
+                        # 类别信息
+                        category = product_details.get('category')
+                        if category:
+                            category_phrases = [
+                                f"它属于我们的「{category}」系列。",
+                                f"这是我们「{category}」分类中的精品。"
+                            ]
+                            response_parts.append(random.choice(category_phrases))
+
+                        # 口感信息
+                        taste = product_details.get('taste')
+                        if taste:
+                            taste_phrases = [
+                                f"说到口感，它{taste}，很多顾客都特别喜欢！",
+                                f"这款产品的口感特点是{taste}，非常独特。"
+                            ]
+                            response_parts.append(random.choice(taste_phrases))
+                        
+                        # 产地信息
+                        origin = product_details.get('origin')
+                        if origin:
+                            origin_phrases = [
+                                f"它来自{origin}，保证新鲜优质。",
+                                f"产地是{origin}，品质有保障。"
+                            ]
+                            response_parts.append(random.choice(origin_phrases))
+                            
+                        # 益处信息
+                        benefits = product_details.get('benefits')
+                        if benefits:
+                            benefits_phrases = [
+                                f"对健康的好处包括：{benefits}，很适合注重健康的朋友。",
+                                f"它的营养价值很高，特别是{benefits}。"
+                            ]
+                            response_parts.append(random.choice(benefits_phrases))
+                            
+                        # 适用人群
+                        suitable_for = product_details.get('suitablefor')
+                        if suitable_for:
+                            suitable_phrases = [
+                                f"特别推荐给{suitable_for}。",
+                                f"很适合{suitable_for}享用。"
+                            ]
+                            response_parts.append(random.choice(suitable_phrases))
+                        
+                        # 关键词信息
+                        keywords_list = product_details.get('keywords', [])
+                        if keywords_list and isinstance(keywords_list, list) and len(keywords_list) > 0:
+                            keywords_str = "、".join(keywords_list)
+                            keywords_phrases = [
+                                f"顾客们常用这些词来形容它：{keywords_str}。",
+                                f"它的特点可以概括为：{keywords_str}。"
+                            ]
+                            response_parts.append(random.choice(keywords_phrases))
+                        elif product_details.get('keywords') and isinstance(product_details.get('keywords'), str):
+                            # 处理可能是字符串的情况
+                            keywords_str = product_details.get('keywords')
+                            if ';' in keywords_str:
+                                keywords_list = [k.strip() for k in keywords_str.split(';')]
+                            else:
+                                keywords_list = [keywords_str]
+                            if keywords_list:
+                                keywords_display = "、".join(keywords_list)
+                                response_parts.append(f"它的特点可以概括为：{keywords_display}。")
+
+                        # 描述信息
+                        description = product_details.get('description')
+                        if description:
+                            description_phrases = [
+                                f"另外，{description}",
+                                f"补充一点，{description}"
+                            ]
+                            response_parts.append(random.choice(description_phrases))
+
+                        # 购买信息
+                        if is_buy_action:
+                            buy_phrases = [
+                                f"\n如果您购买 {quantity} {product_details.get('unit', '份')}，总共是 ${item_total:.2f}。需要为您准备吗？",
+                                f"\n{quantity} {product_details.get('unit', '份')}的总价是 ${item_total:.2f}。您想要购买吗？"
+                            ]
+                            response_parts.append(random.choice(buy_phrases))
+                        else:
+                            closing_phrases = [
+                                "\n您有什么其他问题，或者需要了解其他产品吗？",
+                                "\n需要我为您推荐搭配的其他商品吗？",
+                                "\n还有其他想了解的吗？随时告诉我哦！"
+                            ]
+                            response_parts.append(random.choice(closing_phrases))
+                        
+                        final_response = "\n".join(response_parts)
                         
                         new_general_context_key = top_match_key
                         # Bot is "mentioning" this product by confirming its details/price
@@ -777,12 +1011,13 @@ class ChatHandler:
                         intent_handled = True
         
         if not intent_handled: # Should only be reached if product_catalog is empty initially
-             logger.warning(f"Price_or_buy intent for '{user_input_processed}' could not be handled (e.g. empty catalog).")
-             final_response = "抱歉，我们的产品信息似乎还没有准备好，请稍后再试。"
-             intent_handled = True # Mark as handled to prevent LLM fallback on this specific error
-             new_general_context_key = None
-             new_bot_mention_payload_for_next_turn = None
-
+            logger.warning(f"Price_or_buy intent for '{user_input_processed}' could not be handled (e.g. empty catalog).")
+            final_response = "抱歉，我们的产品信息似乎还没有准备好，请稍后再试。"
+            intent_handled = True # Mark as handled to prevent LLM fallback on this specific error
+            new_general_context_key = None
+            new_bot_mention_payload_for_next_turn = None
+        
+        logger.debug(f"handle_price_or_buy is about to return: intent_handled={intent_handled}, final_response_type={type(final_response)}")
         return final_response, intent_handled, new_general_context_key, new_bot_mention_payload_for_next_turn
 
     def handle_llm_fallback(self, user_input: str, user_input_processed: str, user_id: str) -> Tuple[str, Optional[Dict]]:
@@ -826,7 +1061,7 @@ class ChatHandler:
                 "8. 如果用户询问某个特定类别的产品，请专注于提供该类别的产品信息，并根据产品描述给出个性化建议。"
                 "9. 如果用户提到'刚才'、'刚刚'等词，请注意可能是在询问上一个提到的产品。"
                 "10. 如果上文提到过某个产品 (session['last_product_details']), 而当前用户问题不清晰，可以优先考虑与该产品相关。"
-                "11. (新增) 如果顾客的问题不是很明确（例如只说‘随便看看’或者‘有什么好的’），请主动提问来澄清他们的需求，比如询问他们偏好的品类（水果、蔬菜等）、口味（甜的、酸的）、或者用途（自己吃、送礼等）。"
+                "11. (新增) 如果顾客的问题不是很明确（例如只说'随便看看'或者'有什么好的'），请主动提问来澄清他们的需求，比如询问他们偏好的品类（水果、蔬菜等）、口味（甜的、酸的）、或者用途（自己吃、送礼等）。"
                 "12. (新增) 当顾客遇到问题或者对某些信息不满意时，请表现出同理心，并积极尝试帮助他们解决问题或找到替代方案。在对话中，可以适当运用一些亲和的语气词，但避免过度使用表情符号。"
             )
             messages = [{"role": "system", "content": system_prompt}]
@@ -986,183 +1221,3 @@ class ChatHandler:
                         logger.info(f"LLM fallback response potentially mentioned product: {extracted_product_payload['name']}")
         
         return final_response, extracted_product_payload
-
-    def handle_chat_message(self, user_input: str, user_id: str) -> Union[str, Dict]:
-        """处理用户发送的聊天消息。
-        主要流程:
-        1. 预处理用户输入 (处理上下文追问)。
-        2. 检测意图。
-        3. 根据意图调用相应的处理函数。
-        4. 如果规则处理器都未处理，则调用 LLM 回退。
-        5. 更新用户会话和全局上下文。
-        6. 返回响应。
-        """
-        logger.info(f"--- Chat message received from user {user_id} --- Input: {user_input}")
-        session = self.get_user_session(user_id)
-        
-        # Store bot mention from the *previous* turn. This will be used by handlers.
-        bot_mention_from_last_turn = session.get('last_bot_mentioned_product_payload')
-
-        user_input_processed, user_input_original = self.preprocess_user_input(user_input, user_id)
-        # Initial session update for the query itself, without affecting bot_mentioned_product_payload yet
-        # We will do a consolidated update at the end.
-        # For now, just log query to history if needed by preprocess or other early logic.
-        # session['last_query'] = user_input_original (will be part of final update)
-        # session['history'].append(user_input_original) (will be part of final update)
-
-        intent = self.detect_intent(user_input_processed)
-        logger.info(f"Detected intent: {intent} for processed input: {user_input_processed}")
-        
-        final_response_obj: Optional[Union[str, Dict]] = None
-        intent_handled = False
-        # Initialize context keys with current session values; handlers will update them.
-        new_general_context_key: Optional[str] = session.get('last_product_key')
-        new_general_context_details: Optional[Dict] = session.get('last_product_details')
-        new_bot_mention_for_next_turn: Optional[Dict] = None # This turn's bot action might set this
-        context_updates_for_session: Dict = {}
-
-
-        if intent == 'quantity_follow_up':
-            response_str, gen_ctx_key, gen_ctx_details, bot_mention_payload = self.handle_quantity_follow_up(user_input_processed, user_id)
-            if response_str:
-                final_response_obj = response_str
-                intent_handled = True
-                new_general_context_key = gen_ctx_key
-                new_general_context_details = gen_ctx_details
-                new_bot_mention_for_next_turn = bot_mention_payload
-
-        elif intent == 'what_do_you_sell':
-            final_response_obj = self.handle_what_do_you_sell()
-            intent_handled = True
-            new_general_context_key = None
-            new_general_context_details = None
-            new_bot_mention_for_next_turn = None
-
-        elif intent == 'recommendation':
-            response_str, bot_mention_payload = self.handle_recommendation(user_input_processed, user_id)
-            final_response_obj = response_str
-            intent_handled = True
-            new_general_context_key = None
-            new_general_context_details = None
-            new_bot_mention_for_next_turn = bot_mention_payload
-            # Preserve last_recommendation_category if a category was targeted
-            # This logic was previously in handle_recommendation's update_user_session call
-            target_category_for_rec_context = None
-            # Re-evaluate target_category as handle_recommendation doesn't expose it directly now
-            # For simplicity, if bot_mention_payload exists and has a category, use it.
-            # Or, parse from user_input_processed again if needed for context.
-            # For now, let's assume recommendation context is mainly driven by the bot_mention.
-            if new_bot_mention_for_next_turn and new_bot_mention_for_next_turn.get('key'):
-                # Attempt to get category from the mentioned product's details
-                mentioned_product_details_for_cat = self.product_manager.product_catalog.get(new_bot_mention_for_next_turn['key'])
-                if mentioned_product_details_for_cat:
-                     target_category_for_rec_context = mentioned_product_details_for_cat.get('category')
-            if not target_category_for_rec_context: # Fallback to parsing from input if first item has no category
-                 target_category_for_rec_context = self.product_manager.find_related_category(user_input_processed)
-
-            if target_category_for_rec_context:
-                 context_updates_for_session['last_recommendation_category'] = target_category_for_rec_context
-
-
-        elif intent == 'policy_question':
-            final_response_obj = self.handle_policy_question(user_input_processed)
-            if final_response_obj:
-                intent_handled = True
-            new_general_context_key = None
-            new_general_context_details = None
-            new_bot_mention_for_next_turn = None
-
-        elif intent == 'price_or_buy':
-            # Pass the bot_mention_from_last_turn
-            response_obj, handled, gen_ctx_key, bot_mention_payload = self.handle_price_or_buy(
-                user_input_processed, user_input_original, user_id, bot_mention_from_last_turn
-            )
-            if handled:
-                final_response_obj = response_obj
-                intent_handled = True
-                new_general_context_key = gen_ctx_key
-                new_general_context_details = self.product_manager.product_catalog.get(gen_ctx_key) if gen_ctx_key else None
-                new_bot_mention_for_next_turn = bot_mention_payload
-        
-        elif intent == 'identity_query':
-            final_response_obj = "我是您的智能果蔬客服，很高兴为您服务！"
-            intent_handled = True
-            new_general_context_key = None
-            new_general_context_details = None
-            new_bot_mention_for_next_turn = None
-
-        elif intent == 'recommendation_follow_up':
-            last_rec_category = session.get('context', {}).get('last_recommendation_category')
-            if last_rec_category:
-                logger.info(f"Handling recommendation_follow_up for category: {last_rec_category}")
-                response_str, bot_mention_payload = self.handle_recommendation(user_input_processed, user_id, direct_category=last_rec_category)
-                final_response_obj = response_str
-                new_bot_mention_for_next_turn = bot_mention_payload
-                # Update last_recommendation_category in context if recommendation was successful for this category
-                if bot_mention_payload: # Check if any product was actually recommended
-                     context_updates_for_session['last_recommendation_category'] = last_rec_category
-
-            else:
-                logger.info("recommendation_follow_up, but no last_recommendation_category in session context.")
-                final_response_obj = "您希望我继续推荐哪一类的产品呢？比如水果、蔬菜或者其他。"
-            intent_handled = True
-            new_general_context_key = None
-            new_general_context_details = None
-            # new_bot_mention_for_next_turn is set above if recommendation happened
-
-        if not intent_handled:
-            non_product_keywords = getattr(config, 'FUZZY_SEARCH_EXCLUSION_KEYWORDS', ["你好", "您好", "嗨", "hello", "在吗", "谢谢", "再见", "你是谁", "卖什么", "推荐点", "有什么推荐", "查订单", "退货"])
-            min_fuzzy_length = getattr(config, 'MIN_FUZZY_SEARCH_LENGTH', 2)
-            is_explicit_non_product_command = any(keyword in user_input_original.lower() for keyword in non_product_keywords)
-            should_try_fuzzy_search = intent in ['unknown', 'price_or_buy']
-
-            if should_try_fuzzy_search and not is_explicit_non_product_command and len(user_input_original) > min_fuzzy_length:
-                logger.info(f"Attempting fuzzy product search for: '{user_input_original}' as intent was '{intent}' and not handled by specific rules.")
-                similar_products = self.product_manager.find_similar_products(user_input_original)
-                if similar_products:
-                    log_similar_products = [(p[0], p[1].get('original_display_name')) if isinstance(p, tuple) and len(p) > 1 and isinstance(p[1], dict) else str(p) for p in similar_products]
-                    logger.info(f"Found similar products via find_similar_products: {log_similar_products}")
-                    product_suggestions = []
-                    for product_entry in similar_products:
-                        if isinstance(product_entry, tuple) and len(product_entry) == 2:
-                            product_key_sugg, product_details_sugg = product_entry
-                            if isinstance(product_details_sugg, dict):
-                                product_suggestions.append({"display_text": product_details_sugg.get('original_display_name', product_key_sugg), "payload": product_key_sugg})
-                            else: logger.warning(f"Skipping similar product '{product_key_sugg}' due to unexpected details format: {type(product_details_sugg)}")
-                        else: logger.warning(f"Skipping similar product entry due to unexpected format: {type(product_entry)}")
-                    if product_suggestions:
-                        final_response_obj = {"message": "我没有完全找到您说的产品，不过找到了这些相似的，您看看是哪个？", "product_suggestions": product_suggestions}
-                        intent_handled = True
-                        new_general_context_key = None
-                        new_general_context_details = None
-                        new_bot_mention_for_next_turn = None
-            
-            if not intent_handled:
-                logger.info("No specific intent handled by rules or fuzzy search, falling back to LLM.")
-                llm_response_text, llm_mentioned_product = self.handle_llm_fallback(user_input_original, user_input_processed, user_id)
-                final_response_obj = llm_response_text
-                
-                new_general_context_key = None # LLM fallback usually clears general product context
-                new_general_context_details = None
-                # 如果LLM提及了产品，则将其设置为下一轮的机器人提及产品
-                new_bot_mention_for_next_turn = llm_mentioned_product
-                intent_handled = True
-
-        # Consolidated session update
-        if new_general_context_key and not new_general_context_details: # Ensure details are fetched if only key is new
-            new_general_context_details = self.product_manager.product_catalog.get(new_general_context_key)
-
-        self.update_user_session(user_id,
-                                 query=user_input_original, # Update query for this turn
-                                 product_key=new_general_context_key,
-                                 product_details=new_general_context_details,
-                                 context_updates=context_updates_for_session if context_updates_for_session else None,
-                                 bot_mentioned_product_payload_update=new_bot_mention_for_next_turn)
-        
-        self.last_identified_product_key = new_general_context_key # For app.py global fallback
-
-        logger.info(f"Final response object for user {user_id}: {final_response_obj}")
-        
-        if final_response_obj is None:
-            return "抱歉，我暂时无法理解您的意思，请换个说法试试？"
-        return final_response_obj
