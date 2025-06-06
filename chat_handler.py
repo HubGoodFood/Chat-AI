@@ -242,14 +242,13 @@ class ChatHandler:
                 query_for_matching = query_for_matching.replace(stopword, '')
             query_for_matching = query_for_matching.strip()
             
-            # 如果清洗后仍有内容，则进行模糊匹配
+            # 如果清洗后仍有内容，说明用户在询问一个具体的东西
             if query_for_matching:
-                fuzzy_matches = self.product_manager.fuzzy_match_product(query_for_matching)
-                # 只要能模糊匹配到任何分数可接受的产品，就认为是 price_or_buy 意图
-                if fuzzy_matches and any(score >= config.MIN_ACCEPTABLE_MATCH_SCORE for _, score in fuzzy_matches):
-                    return 'price_or_buy'
+                # 无论是否能在目录中找到，都将其视为price_or_buy意图。
+                # handle_price_or_buy函数将负责处理找到/找不到的情况。
+                return 'price_or_buy'
             
-            # 如果清洗后为空（例如，用户只说了"多少钱"），检查原始输入是否包含关键词
+            # 如果清洗后为空（例如，用户只说了"多少钱"），则检查原始输入是否包含关键词
             else:
                 if any(keyword in user_input_processed for keyword in config.PRICE_QUERY_KEYWORDS) or \
                    any(keyword in user_input_processed for keyword in config.BUY_INTENT_KEYWORDS) or \
@@ -365,7 +364,7 @@ class ChatHandler:
             # extracted_product_payload 的逻辑将在下面处理 product_suggestions 时更新
             if recommendation_result.get("product_suggestions"):
                 first_suggestion = recommendation_result["product_suggestions"][0]
-                product_details_for_payload = self.product_manager.get_product_details_by_key(first_suggestion.get('payload'))
+                product_details_for_payload = self.product_manager.product_catalog.get(first_suggestion.get('payload'))
                 if product_details_for_payload:
                     extracted_product_payload = {
                         'key': first_suggestion.get('payload'),
@@ -381,7 +380,7 @@ class ChatHandler:
             final_response = recommendation_result_follow_up
             if recommendation_result_follow_up.get("product_suggestions"):
                 first_suggestion_fu = recommendation_result_follow_up["product_suggestions"][0]
-                product_details_for_payload_fu = self.product_manager.get_product_details_by_key(first_suggestion_fu.get('payload'))
+                product_details_for_payload_fu = self.product_manager.product_catalog.get(first_suggestion_fu.get('payload'))
                 if product_details_for_payload_fu:
                      extracted_product_payload = { # 更新 extracted_product_payload
                         'key': first_suggestion_fu.get('payload'),
@@ -413,7 +412,7 @@ class ChatHandler:
                 first_suggestion_payload_str = final_response["product_suggestions"][0].get('payload')
                 if first_suggestion_payload_str:
                     # Payload 存储的是产品key，我们需要产品详情
-                    product_details_for_payload = self.product_manager.get_product_details_by_key(first_suggestion_payload_str)
+                    product_details_for_payload = self.product_manager.product_catalog.get(first_suggestion_payload_str)
                     if product_details_for_payload:
                          bot_mentioned_payload = {
                             'key': first_suggestion_payload_str,
@@ -708,11 +707,30 @@ class ChatHandler:
                 recommendations_text_list.append(f"- {self.product_manager.format_product_display(details, tag=tag)}")
             recommendations_list_str = "\n".join(recommendations_text_list)
 
+            # --- 新增：人性化回复模板 ---
+            opening_phrases = [
+                f"哎呀，真不好意思，您提到的'{query_desc}'我们店里暂时还没有呢。",
+                f"您好！您提到的'{query_desc}'我们暂时没有完全一样的呢。",
+                f"关于'{query_desc}'，目前正好缺货，非常抱歉！"
+            ]
+            
+            recommendation_intros = [
+                "不过，这里有几款相似或店里很受欢迎的产品，您可以看看喜不喜欢：",
+                "不过别担心，我们有一些很棒的替代品，也许您会感兴趣：",
+                "为您推荐几款我们这里的优选好物，都很不错哦："
+            ]
+
+            closing_phrases = [
+                "这些里面有您中意的吗？或者，如果您能告诉我您更偏好哪种口味、品类或者有什么特定需求，我非常乐意再帮您精心挑选一下！",
+                "看看这些有没有您喜欢的？如果没有，随时告诉我您的偏好，我再帮您找找看！",
+                "您对这些推荐感兴趣吗？或者想了解其他什么类型的产品呢？"
+            ]
+
             response_str = (
-                f"您好！您提到的'{query_desc}'我们暂时没有完全一样的呢。不过，这里有几款相似或店里很受欢迎的产品，"
-                f"您可以看看喜不喜欢：\n\n{recommendations_list_str}\n\n"
-                f"这些里面有您中意的吗？或者，如果您能告诉我您更偏好哪种口味、品类或者有什么特定需求，"
-                f"我非常乐意再帮您精心挑选一下！"
+                f"{random.choice(opening_phrases)}\n"
+                f"{random.choice(recommendation_intros)}\n\n"
+                f"{recommendations_list_str}\n\n"
+                f"{random.choice(closing_phrases)}"
             )
             return response_str
         else:
@@ -1082,7 +1100,11 @@ class ChatHandler:
                 "10. 如果上文提到过某个产品 (session['last_product_details']), 而当前用户问题不清晰，可以优先考虑与该产品相关。"
                 "11. (新增) 如果顾客的问题不是很明确（例如只说'随便看看'或者'有什么好的'），请主动提问来澄清他们的需求，比如询问他们偏好的品类（水果、蔬菜等）、口味（甜的、酸的）、或者用途（自己吃、送礼等）。"
                 "12. (新增) 当顾客遇到问题或者对某些信息不满意时，请表现出同理心，并积极尝试帮助他们解决问题或找到替代方案。在对话中，可以适当运用一些亲和的语气词，但避免过度使用表情符号。"
-                "13. (重要) 当告知用户某商品缺货并推荐替代品时，请务必保持回复简洁、友好、切中要点。你可以先对用户想找的商品表示理解（例如，'蓝莓确实很受欢迎呢'），然后明确告知我们暂时没有，最后自然地推荐1-2个最相关的替代品即可。请避免生成与此模式无关的、冗长或重复的文字。"
+                "13. (重要) 当告知用户某商品缺货时，你必须严格遵循以下三步结构来回复，不要添加任何额外的前言或总结：\n"
+                "    a. **共情与确认**: 首先，用一句话对用户想找的商品表示理解。例如：'蓝莓确实是很受欢迎的水果呢！'\n"
+                "    b. **明确告知缺货**: 接着，用一句话直接了当地告知我们暂时没有该商品。例如：'不过很抱歉，我们目前暂时没有蓝莓哦。'\n"
+                "    c. **提供替代品**: 最后，从我提供的产品列表中，选择1到2个最相关的产品作为替代品进行推荐，并简单说明推荐理由。例如：'不过，如果您喜欢新鲜的水果，我们有**新鲜山楂**，酸甜可口，很适合直接吃或者做成果酱呢！'\n"
+                "    请严格按照这个 'a-b-c' 的结构来组织你的回复，确保内容简洁、友好且切中要点。"
             )
             messages = [{"role": "system", "content": system_prompt}]
             
