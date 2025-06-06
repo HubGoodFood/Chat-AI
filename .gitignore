@@ -22,4 +22,6 @@ env/
 Thumbs.db
 cache/
 
+# Application-specific
 .env
+intent_model/

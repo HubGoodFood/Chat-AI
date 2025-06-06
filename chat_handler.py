@@ -5,6 +5,7 @@ from typing import Tuple, Optional, Dict, Any, Union
 from cache_manager import CacheManager
 from product_manager import ProductManager
 from policy_manager import PolicyManager
+from intent_classifier import IntentClassifier # 导入新的意图分类器
 import random
 
 # 配置日志
@@ -25,6 +26,7 @@ class ChatHandler:
         self.product_manager = product_manager
         self.policy_manager = policy_manager or PolicyManager()
         self.cache_manager = cache_manager or CacheManager()
+        self.intent_classifier = IntentClassifier(model_path="intent_model") # 初始化意图分类器
         
         # 用户会话状态
         self.user_sessions = {}  # {user_id: session_data}
@@ -191,84 +193,67 @@ class ChatHandler:
         return user_input_processed, user_input_original
         
     def detect_intent(self, user_input_processed: str) -> str:
-        """检测用户意图
-        
-        Args:
-            user_input_processed (str): 处理后的用户输入
-            
-        Returns:
-            str: 意图类型 ('quantity_follow_up', 'what_do_you_sell',
-                         'recommendation', 'price_or_buy', 'policy_question', 'identity_query', 'greeting', 'unknown')
         """
+        使用微调后的模型检测用户意图。
+        如果模型不可用，则回退到基于关键词的简单规则检测。
+        """
+        # 优先使用模型进行预测
+        if self.intent_classifier and self.intent_classifier.model:
+            predicted_intent = self.intent_classifier.predict(user_input_processed)
+            # 如果模型给出了一个明确的意图（不是unknown），则使用它
+            if predicted_intent != 'unknown':
+                return predicted_intent
+        
+        # --- 模型不可用或预测为 'unknown' 时的回退规则 ---
+        logger.warning(f"模型无法预测意图或预测为unknown，回退到规则检测: '{user_input_processed}'")
+
         # 1. 检查是否是纯粹的问候语
         greeting_keywords = ["你好", "您好", "hi", "hello", "在吗"]
-        # 使用完全匹配来避免误判，例如 "你好，我想买苹果"
         if user_input_processed in greeting_keywords:
             return 'greeting'
 
-        # 2. 检查是否是追问推荐的意图（如"其他"、"还有"）
-        if any(k in user_input_processed for k in ["其他", "还有"]):
-            return 'recommendation_follow_up'
-            
-        # 3. 检查是否是纯数量追问
-        quantity_pattern = r'^\s*([\d一二三四五六七八九十百千万俩两]+)\s*(?:份|个|条|块|包|袋|盒|瓶|箱|打|磅|斤|公斤|kg|g|只|听|罐|组|件|本|支|枚|棵|株|朵|头|尾|条|片|串|扎|束|打|筒|碗|碟|盘|杯|壶|锅|桶|篮|筐|篓|扇|面|匹|卷|轴|封|枚|锭|丸|粒|钱|两|克|斗|石|顷|亩|分|厘|毫)?\s*(?:呢|呀|啊|吧|多少钱|总共)?\s*$'
-        if re.match(quantity_pattern, user_input_processed):
-            return 'quantity_follow_up'
-            
-        # 4. 检查是否询问"卖什么"
-        if any(keyword in user_input_processed
-               for keyword in config.WHAT_DO_YOU_SELL_KEYWORDS):
+        # 2. 检查是否询问"卖什么"
+        if any(keyword in user_input_processed for keyword in config.WHAT_DO_YOU_SELL_KEYWORDS):
             return 'what_do_you_sell'
             
-        # 5. 检查是否是推荐请求
-        if any(keyword in user_input_processed
-               for keyword in config.RECOMMEND_KEYWORDS):
-            return 'recommendation'
+        # 3. 检查是否是推荐请求
+        if any(keyword in user_input_processed for keyword in config.RECOMMEND_KEYWORDS):
+            return 'request_recommendation'
             
-        # 6. 检查是否是政策相关问题 (提高优先级)
+        # 4. 检查是否是政策相关问题
         policy_keywords_flat = [kw for sublist in config.POLICY_KEYWORD_MAP.values() for kw in sublist]
         if any(k in user_input_processed for k in policy_keywords_flat):
-            # 如果查询中包含明确的政策性词语，直接判定为政策问题
-            # 这是一个更强的信号，应该优先于宽泛的产品查询
-            return 'policy_question'
+            return 'inquiry_policy'
 
-        # 7. 检查机器人身份查询
-        identity_keywords = ["你是谁", "你叫什么", "你是什么", "什么模型", "你的名字", "who are you", "what are you"]
-        if any(keyword in user_input_processed for keyword in identity_keywords):
-            return 'identity_query'
-
-        # 8. 检查是否是价格查询或购买意图
-        try:
-            # --- 使用与 handle_price_or_buy 中类似的查询清洗逻辑，以更准确地识别产品 ---
+        # 5. 检查是否是关于可用性的查询 ("有没有")
+        # 这里的关键词应该更精确，避免与购买意图冲突
+        availability_keywords = ["有没有", "有卖", "有这个吗"]
+        if any(keyword in user_input_processed for keyword in availability_keywords):
+             # 清洗查询以更好地匹配产品
             query_for_matching = user_input_processed
-            # 从config中获取所有需要剔除的词
-            all_stopwords = (config.PRICE_QUERY_KEYWORDS +
-                             config.BUY_INTENT_KEYWORDS +
-                             config.GENERAL_QUERY_KEYWORDS +
-                             ["你们", "我们", "我", "你", "他", "她", "它", "的", "地", "得", "了", "着", "过", "吗", "呢", "吧", "呀", "啊", "什么", "是", "不是", "想", "要", "请问", "那个", "这个"])
-            
+            all_stopwords = availability_keywords + ["你们", "我们", "我", "你", "的", "吗", "呢", "吧", "呀", "啊"]
             for stopword in set(all_stopwords):
                 query_for_matching = query_for_matching.replace(stopword, '')
-            query_for_matching = query_for_matching.strip()
-            
-            # 如果清洗后仍有内容，说明用户在询问一个具体的东西
-            if query_for_matching:
-                # 无论是否能在目录中找到，都将其视为price_or_buy意图。
-                # handle_price_or_buy函数将负责处理找到/找不到的情况。
-                return 'price_or_buy'
-            
-            # 如果清洗后为空（例如，用户只说了"多少钱"），则检查原始输入是否包含关键词
-            else:
-                if any(keyword in user_input_processed for keyword in config.PRICE_QUERY_KEYWORDS) or \
-                   any(keyword in user_input_processed for keyword in config.BUY_INTENT_KEYWORDS) or \
-                   any(keyword in user_input_processed for keyword in config.GENERAL_QUERY_KEYWORDS):
-                    return 'price_or_buy' # 依赖上下文处理
+            if query_for_matching.strip():
+                return 'inquiry_availability'
 
-        except Exception as e:
-            logger.error(f"Error during intent detection's fuzzy match: {e}")
-            pass # Fall through to unknown
-        
-        # 如果没有匹配到任何可接受的产品，则让LLM来处理
+        # 6. 检查是否是价格查询或购买意图 ("卖不卖", "多少钱")
+        # 这个应该在可用性查询之后，因为它是一个更强的意图
+        price_buy_keywords = config.PRICE_QUERY_KEYWORDS + config.BUY_INTENT_KEYWORDS + ["卖不卖"]
+        if any(keyword in user_input_processed for keyword in price_buy_keywords):
+            return 'inquiry_price_or_buy'
+
+        # 7. 如果包含产品名，但没有明确意图词，也倾向于是价格/购买意图
+        try:
+            query_for_matching = user_input_processed
+            all_stopwords = ["你们", "我们", "我", "你", "他", "她", "它", "的", "地", "得", "了", "着", "过", "吗", "呢", "吧", "呀", "啊", "什么", "是", "不是", "想", "要", "请问", "那个", "这个"]
+            for stopword in set(all_stopwords):
+                query_for_matching = query_for_matching.replace(stopword, '')
+            if query_for_matching.strip():
+                 return 'inquiry_price_or_buy'
+        except Exception:
+            pass
+
         return 'unknown'
         
     def handle_chat_message(self, user_input: str, user_id: str) -> Union[str, Dict, None]:
@@ -365,7 +350,7 @@ class ChatHandler:
                 "您好，我是您的专属生鲜小助手，随时为您服务！"
             ])
 
-        elif intent == 'quantity_follow_up':
+        elif intent == 'quantity_follow_up': # 这个意图在新的分类器中没有，但可以保留规则作为回退
             final_response, product_key, product_details, _ = self.handle_quantity_follow_up(user_input_processed, user_id)
             if product_key and product_details:
                 self.update_user_session(user_id, query=user_input_original, product_key=product_key, product_details=product_details)
@@ -373,9 +358,10 @@ class ChatHandler:
         elif intent == 'what_do_you_sell':
             final_response = self.handle_what_do_you_sell()
 
-        elif intent == 'recommendation':
+        elif intent == 'request_recommendation' or intent == 'recommendation_follow_up': # 合并推荐意图
             # handle_recommendation 现在返回一个包含 'message' 和 'product_suggestions' 的字典
-            recommendation_result = self.handle_recommendation(user_input_processed, user_id)
+            direct_category = "其他" if intent == 'recommendation_follow_up' else None
+            recommendation_result = self.handle_recommendation(user_input_processed, user_id, direct_category=direct_category)
             final_response = recommendation_result # 这将是一个字典
             # extracted_product_payload 的逻辑将在下面处理 product_suggestions 时更新
             if recommendation_result.get("product_suggestions"):
@@ -390,26 +376,12 @@ class ChatHandler:
                         'description': product_details_for_payload.get('description')
                     }
 
-        elif intent == 'recommendation_follow_up':
-            # handle_recommendation 现在返回一个包含 'message' 和 'product_suggestions' 的字典
-            recommendation_result_follow_up = self.handle_recommendation(user_input_processed, user_id, direct_category="其他")
-            final_response = recommendation_result_follow_up
-            if recommendation_result_follow_up.get("product_suggestions"):
-                first_suggestion_fu = recommendation_result_follow_up["product_suggestions"][0]
-                product_details_for_payload_fu = self.product_manager.product_catalog.get(first_suggestion_fu.get('payload'))
-                if product_details_for_payload_fu:
-                     extracted_product_payload = { # 更新 extracted_product_payload
-                        'key': first_suggestion_fu.get('payload'),
-                        'name': product_details_for_payload_fu.get('original_display_name') or product_details_for_payload_fu.get('name'),
-                        'price': product_details_for_payload_fu.get('price'),
-                        'specification': product_details_for_payload_fu.get('specification'),
-                        'description': product_details_for_payload_fu.get('description')
-                    }
-
-        elif intent == 'policy_question':
+        elif intent == 'inquiry_policy':
             final_response = self.handle_policy_question(user_input_processed)
 
-        elif intent == 'price_or_buy':
+        # 将 price_or_buy 和新增加的 inquiry_availability 都指向 handle_price_or_buy
+        # handle_price_or_buy 内部逻辑会处理找到和找不到产品的情况，这对于两种意图都适用
+        elif intent == 'inquiry_price_or_buy' or intent == 'inquiry_availability':
             response, session_updated, product_key, product_details = self.handle_price_or_buy(user_input_processed, user_input_original, user_id, last_bot_mentioned_payload)
             if not session_updated and product_key: # 如果handle_price_or_buy内部没有更新会话
                 self.update_user_session(user_id, query=user_input_original, product_key=product_key, product_details=product_details)
