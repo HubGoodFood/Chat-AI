@@ -43,7 +43,29 @@ envVars:
 - AWS ElastiCache
 - Railway Redis
 
-### 2. 依赖安装失败
+### 2. LLM客户端配置错误
+
+**错误信息：**
+```
+Client.__init__() got an unexpected keyword argument 'proxies'
+```
+
+**原因：**
+- OpenAI库版本兼容性问题
+- 客户端初始化参数错误
+
+**✅ 解决方案：**
+已在`src/config/settings.py`中添加兼容性处理：
+```python
+# 自动检测OpenAI库版本并使用兼容参数
+client_kwargs = {
+    'api_key': DEEPSEEK_API_KEY,
+    'base_url': DEEPSEEK_BASE_URL
+}
+llm_client = OpenAI(**client_kwargs)
+```
+
+### 3. 依赖安装失败
 
 **错误信息：**
 ```
@@ -51,13 +73,13 @@ ERROR: Could not find a version that satisfies the requirement...
 ```
 
 **解决方案：**
-确保使用轻量级依赖：
+确保使用正确的依赖文件：
 ```yaml
 buildCommand: |
   pip install -r requirements.txt
 ```
 
-### 3. 内存不足错误
+### 4. 内存不足错误
 
 **错误信息：**
 ```
@@ -74,7 +96,7 @@ envVars:
     value: true
 ```
 
-### 4. 启动超时
+### 5. 启动超时
 
 **错误信息：**
 ```
