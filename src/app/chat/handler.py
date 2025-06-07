@@ -12,6 +12,9 @@ from src.core.cache import CacheManager
 from src.app.products.manager import ProductManager
 from src.app.policy.manager import PolicyManager
 from src.app.intent.lightweight_classifier import LightweightIntentClassifier
+from src.core.context_manager import EnhancedContextManager
+from src.app.nlp.chinese_processor import ChineseProcessor
+from src.app.nlp.semantic_matcher import SemanticMatcher
 import random
 
 # 配置日志
@@ -37,6 +40,11 @@ class ChatHandler:
         self.cache_manager = cache_manager or CacheManager()
         self.smart_cache = smart_cache  # 智能缓存管理器
         self.intent_classifier = LightweightIntentClassifier(lazy_load=True) # 使用轻量级分类器
+
+        # 新增：语义处理组件
+        self.chinese_processor = ChineseProcessor()
+        self.semantic_matcher = SemanticMatcher(self.chinese_processor)
+        self.context_manager = EnhancedContextManager()
         
         # 用户会话状态
         self.user_sessions = {}  # {user_id: session_data}
@@ -342,11 +350,15 @@ class ChatHandler:
 
     def detect_intent(self, user_input_processed: str) -> str:
         """
-        使用微调后的模型检测用户意图。
-        如果模型不可用，则回退到基于关键词的简单规则检测。
+        使用增强的语义分析检测用户意图。
+        结合规则匹配、语义模板和机器学习模型。
         """
-        # --- 规则优先：首先检查明确的、高优先级的模式 ---
-        
+        # --- 第一层：语义特征提取 ---
+        semantic_features = self.chinese_processor.extract_intent_features(user_input_processed)
+        template_matches = self.semantic_matcher.match_intent_template(user_input_processed)
+
+        # --- 第二层：规则优先检查明确的、高优先级的模式 ---
+
         # 1. 检查是否是纯粹的问候语 (高优先级)
         # 避免模型将 "你好" 错误地识别为对包含 "好" 字的产品的查询
         greeting_keywords = ["你好", "您好", "hi", "hello", "在吗"]
@@ -364,6 +376,20 @@ class ChatHandler:
         if any(trigger in user_input_processed for trigger in identity_triggers) and \
            any(noun in user_input_processed for noun in identity_nouns):
             return 'identity_query'
+
+        # 3. 语义模板匹配检查 (新增)
+        if template_matches:
+            # 选择置信度最高的意图
+            best_intent = None
+            best_score = 0.0
+            for intent, match_info in template_matches.items():
+                if match_info['score'] > best_score:
+                    best_score = match_info['score']
+                    best_intent = intent
+
+            if best_intent and best_score > 0.8:  # 高置信度阈值
+                logger.debug(f"语义模板匹配: '{user_input_processed}' -> {best_intent} (分数: {best_score:.3f})")
+                return best_intent
 
         # 3. 检查是否是退货请求 (高优先级，在政策查询之前)
         # 明确的退货请求模式，避免被误判为政策查询
@@ -383,7 +409,48 @@ class ChatHandler:
             r'.*申请.*退.*',
             r'.*需要.*退.*',
             r'.*想.*退款.*',
-            r'.*要求.*退.*'
+            r'.*要求.*退.*',
+            # 新增：支持询问退货流程的表达
+            r'怎么退.*',           # "怎么退"、"怎么退货"
+            r'如何退.*',           # "如何退"、"如何退货"
+            r'.*怎么退$',          # "芒果烂了怎么退"
+            r'.*如何退$',          # "苹果坏了如何退"
+            r'.*怎么退货.*',       # "这个怎么退货"
+            r'.*如何退货.*',       # "这个如何退货"
+            # 新增：质量问题相关的退货表达
+            r'.*(烂了|坏了|变质|有问题|质量问题).*(怎么|如何).*退.*',
+            r'.*(烂了|坏了|变质|有问题|质量问题).*退.*',
+            r'.*退.*(烂了|坏了|变质|有问题|质量问题).*',
+            # 新增：售后服务相关表达
+            r'.*(烂了|坏了|变质|有问题|质量问题).*(怎么办|如何处理).*',
+            r'.*售后.*',
+            r'.*客服.*',
+            # 新增：退货流程相关（但排除政策查询）
+            r'.*退货.*流程.*是.*',     # "退货流程是什么"
+            r'.*退货.*步骤.*是.*',     # "退货步骤是什么"
+            # 新增：更多退货相关表达
+            r'^退$',               # 单独的"退"
+            r'.*能退.*',           # "能退吗"、"能退不"
+            r'.*可以退.*',         # "可以退货吗"、"可以退不"
+            r'.*想退.*',           # "想退货"、"想退掉"
+            r'.*要退.*',           # "要退货"、"要退掉"
+            r'.*退.*吗$',          # "退吗"、"能退吗"
+            r'.*退.*不$',          # "退不"、"能退不"
+            r'.*换货.*',           # "换货"、"想换货"
+            r'.*手续.*退.*',       # "退货需要什么手续"
+            r'.*退.*手续.*',       # "退货手续"
+
+            r'.*找谁.*退.*',       # "找谁退"
+            r'.*退.*找谁.*',       # "退货找谁"
+            # 新增：简短的产品+质量问题表达（暗示退货意图）
+            r'^[^，。！？]*[产品名称]+(坏了|烂了|变质|有问题|不好|不新鲜|不甜|酸|苦|软了|硬了|有虫|发霉)$',
+            r'^(苹果|香蕉|芒果|西瓜|葡萄|草莓|橙子|柠檬|桃子|樱桃|蓝莓|火龙果|猕猴桃|荔枝|龙眼|榴莲|菠萝|椰子|山楂|芭乐|白菜|萝卜|土豆|番茄|黄瓜|茄子|鸡|鸭|鱼|虾|蟹|肉|鸡肉)+(坏了|烂了|变质|有问题|不好|不新鲜|不甜|酸|苦|软了|硬了|有虫|发霉)$',
+            # 新增：更多质量问题+产品的组合
+            r'^(坏了|烂了|变质|有问题|不好|不新鲜|不甜|酸|苦|软了|硬了|有虫|发霉).*(苹果|香蕉|芒果|西瓜|葡萄|草莓|橙子|柠檬|桃子|樱桃|蓝莓|火龙果|猕猴桃|荔枝|龙眼|榴莲|菠萝|椰子|山楂|芭乐|白菜|萝卜|土豆|番茄|黄瓜|茄子|鸡|鸭|鱼|虾|蟹|肉|鸡肉)',
+            # 新增：换货相关表达
+            r'.*换.*好.*的.*',      # "换个好的"
+            r'.*换.*新.*的.*',      # "换个新的"
+            r'.*换.*别.*的.*'       # "换个别的"
         ]
 
         for pattern in refund_request_patterns:
@@ -431,7 +498,10 @@ class ChatHandler:
             "怎么取货", "如何取货", "取货怎么", "在哪取货",
             "什么规定", "有什么规则", "群规是什么", "规定是什么",
             "质量问题怎么", "有问题怎么", "怎么退款", "如何退款",
-            "理念是什么", "宗旨是什么", "什么理念"
+            "理念是什么", "宗旨是什么", "什么理念",
+            # 新增：退货流程相关的政策查询（与退货请求区分）
+            "退货流程怎么样", "退货流程如何", "退货政策怎么样", "退货政策如何",
+            "退货规定怎么样", "退货规定如何", "退货条款", "退货须知"
         ]
 
         if any(pattern in user_input_processed for pattern in policy_patterns):
