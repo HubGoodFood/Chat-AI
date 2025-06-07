@@ -2,13 +2,11 @@ import os
 import json
 import logging
 from typing import Dict, List, Any, Optional
-from sentence_transformers import SentenceTransformer, util
-import torch
 
 logger = logging.getLogger(__name__)
 
 class PolicyManager:
-    """Load and search policy text with semantic capabilities."""
+    """Load and search policy text with lightweight and semantic capabilities."""
 
     def __init__(self, policy_file='data/policy.json', model_name='paraphrase-multilingual-MiniLM-L12-v2', lazy_load=True):
         self.policy_file = policy_file
@@ -16,17 +14,34 @@ class PolicyManager:
         self.policy_sentences: List[str] = []
         self.policy_embeddings = None
         self.model_name = model_name
-        self.model: Optional[SentenceTransformer] = None
+        self.model: Optional[Any] = None  # SentenceTransformer model (heavy)
+        self.lightweight_manager = None  # Lightweight policy manager
         self.lazy_load = lazy_load
         self._model_loaded = False
 
         # 总是加载政策数据（这很快）
         self.load_policy()
 
-        # 根据lazy_load决定是否立即加载模型
+        # 优先初始化轻量级管理器
+        self._init_lightweight_manager()
+
+        # 根据lazy_load决定是否立即加载重型模型
         if not lazy_load:
             self._load_model()
             self._generate_embeddings()
+
+    def _init_lightweight_manager(self):
+        """初始化轻量级政策管理器"""
+        try:
+            from .lightweight_manager import LightweightPolicyManager
+            self.lightweight_manager = LightweightPolicyManager(
+                policy_file=self.policy_file,
+                lazy_load=True
+            )
+            logger.info("轻量级政策管理器初始化成功")
+        except Exception as e:
+            logger.warning(f"轻量级政策管理器初始化失败: {e}")
+            self.lightweight_manager = None
 
     def load_policy(self):
         """Loads policy data from the JSON file."""
@@ -68,11 +83,17 @@ class PolicyManager:
             self._model_loaded = True
 
     def _load_model(self):
-        """Loads the sentence transformer model."""
+        """Loads the sentence transformer model (heavy dependency)."""
         try:
+            # 懒加载重型依赖
+            from sentence_transformers import SentenceTransformer
+
             logger.info(f"正在加载SentenceTransformer模型 '{self.model_name}'...")
             self.model = SentenceTransformer(self.model_name)
             logger.info(f"SentenceTransformer model '{self.model_name}' loaded successfully.")
+        except ImportError:
+            logger.warning("sentence-transformers未安装，将仅使用轻量级政策搜索")
+            self.model = None
         except Exception as e:
             logger.error(f"Failed to load SentenceTransformer model '{self.model_name}': {e}")
             self.model = None
@@ -112,6 +133,10 @@ class PolicyManager:
             return [keyword_result] if keyword_result else []
 
         try:
+            # 懒加载重型依赖
+            from sentence_transformers import util
+            import torch
+
             query_embedding = self.model.encode(query, convert_to_tensor=True)
             # Compute cosine-similarity between the query and all policy sentences
             cosine_scores = util.cos_sim(query_embedding, self.policy_embeddings)[0]
@@ -128,11 +153,49 @@ class PolicyManager:
 
             return relevant_sentences
 
+        except ImportError:
+            logger.warning("重型依赖未安装，回退到关键词搜索")
+            keyword_result = self.find_policy_excerpt([query])
+            return [keyword_result] if keyword_result else []
         except Exception as e:
             logger.error(f"An error occurred during semantic search: {e}")
             # Fallback to keyword search on error
             keyword_result = self.find_policy_excerpt([query]) # Use the old method as fallback
             return [keyword_result] if keyword_result else []
+
+    def search_policy(self, query: str, top_k: int = 3) -> List[str]:
+        """
+        搜索政策，优先使用轻量级方法，重型方法作为备选
+
+        Args:
+            query (str): 搜索查询
+            top_k (int): 返回结果数量
+
+        Returns:
+            List[str]: 相关政策句子列表
+        """
+        # 优先使用轻量级管理器
+        if self.lightweight_manager:
+            try:
+                results = self.lightweight_manager.search_policy(query, top_k)
+                if results:
+                    logger.debug(f"轻量级政策搜索找到 {len(results)} 条结果")
+                    return results
+            except Exception as e:
+                logger.warning(f"轻量级政策搜索失败: {e}，回退到语义搜索")
+
+        # 回退到重型语义搜索
+        try:
+            results = self.find_policy_excerpt_semantic(query, top_k)
+            if results:
+                logger.debug(f"语义政策搜索找到 {len(results)} 条结果")
+                return results
+        except Exception as e:
+            logger.warning(f"语义政策搜索失败: {e}，回退到关键词搜索")
+
+        # 最后回退到关键词搜索
+        keyword_result = self.find_policy_excerpt([query])
+        return [keyword_result] if keyword_result else ["请联系客服了解具体政策信息。"]
 
     def find_policy_excerpt(self, keywords: List[str]) -> str:
         """

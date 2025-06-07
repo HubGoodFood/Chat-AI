@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 # Add the project root directory to sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
 if PROJECT_ROOT not in sys.path:
@@ -18,6 +19,7 @@ from src.core.cache import CacheManager # Reverted to src.
 from src.app.products.manager import ProductManager # Reverted to src.
 from src.app.chat.handler import ChatHandler # Reverted to src.
 from src.app.policy.manager import PolicyManager # Reverted to src.
+from src.core.performance_monitor import init_global_monitor, get_global_monitor, monitor_performance
 
 app = Flask(__name__, template_folder='../../templates', static_folder='../../static') # 修改
 
@@ -28,11 +30,25 @@ logging.basicConfig(level=logging.DEBUG, # 修改日志级别为 DEBUG
 logger = logging.getLogger(__name__)
 # --- 结束：配置日志 ---
 
+# 注册监控蓝图
+try:
+    from src.app.monitoring.dashboard import monitoring_bp
+    app.register_blueprint(monitoring_bp)
+    logger.info("监控仪表板已注册")
+except Exception as e:
+    logger.warning(f"监控仪表板注册失败: {e}")
+
 logger.info(" Flask app script is starting up... ") # 修改
 logger.info(" Flask app object created. ") # 修改
 
+# --- 初始化监控系统 ---
+enable_monitoring = os.environ.get('MONITORING_ENABLED', 'true').lower() == 'true'
+performance_monitor = init_global_monitor(enable_detailed_monitoring=enable_monitoring)
+
 # --- 初始化管理器 ---
-cache_manager = CacheManager()
+enable_redis = os.environ.get('REDIS_ENABLED', 'true').lower() == 'true'
+redis_url = os.environ.get('REDIS_URL')
+cache_manager = CacheManager(enable_redis=enable_redis, redis_url=redis_url)
 product_manager = ProductManager(cache_manager=cache_manager)
 policy_manager = PolicyManager(lazy_load=True)  # 使用懒加载避免启动时超时
 
@@ -76,12 +92,22 @@ except Exception as e:
             chat_handler = None  # 明确设置为 None，后续使用前需要检查
 
 @app.route('/health')
+@monitor_performance(performance_monitor, endpoint='/health')
 def health_check():
     """健康检查端点"""
-    return jsonify({
+    # 获取系统健康状态
+    health_status = {
         "status": "ok",
-        "message": "应用运行正常"
-    }), 200
+        "message": "应用运行正常",
+        "uptime_seconds": time.time() - performance_monitor.start_time,
+        "cache": cache_manager.health_check(),
+        "monitoring": {
+            "enabled": enable_monitoring,
+            "stats": performance_monitor.get_performance_summary(time_window_minutes=5)
+        }
+    }
+
+    return jsonify(health_status), 200
 
 @app.route('/')
 def index():
@@ -103,6 +129,7 @@ def test_frontend():
         return "测试页面不可用", 500
 
 @app.route('/chat', methods=['POST'])
+@monitor_performance(performance_monitor, endpoint='/chat')
 def chat():
     """处理用户发送的聊天消息的API端点。"""
     logger.info("--- Chat route entered ---")

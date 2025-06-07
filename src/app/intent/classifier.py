@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 class IntentClassifier:
     """
-    意图分类器：优先使用混合分类器，BERT作为备选
+    意图分类器：优先使用轻量级分类器，混合分类器作为备选，BERT作为最后备选
     """
     def __init__(self, model_path: str = "src/models/intent_model", lazy_load: bool = True):
         """
@@ -21,6 +21,7 @@ class IntentClassifier:
         self.model = None
         self.tokenizer = None
         self.label_map = None
+        self.lightweight_classifier = None
         self.hybrid_classifier = None
         self._models_loaded = False
 
@@ -31,17 +32,28 @@ class IntentClassifier:
     def _ensure_models_loaded(self):
         """确保模型已加载（懒加载）"""
         if not self._models_loaded:
-            # 初始化混合分类器（主要方法）
+            # 初始化轻量级分类器（主要方法，优先级最高）
             try:
-                from .hybrid_classifier import HybridIntentClassifier
-                self.hybrid_classifier = HybridIntentClassifier(lazy_load=True)
-                logger.info("混合意图分类器初始化成功")
+                from .lightweight_classifier import LightweightIntentClassifier
+                self.lightweight_classifier = LightweightIntentClassifier(lazy_load=True)
+                logger.info("轻量级意图分类器初始化成功")
             except Exception as e:
-                logger.warning(f"混合分类器初始化失败: {e}，将使用BERT模型")
-                self.hybrid_classifier = None
+                logger.warning(f"轻量级分类器初始化失败: {e}，将使用混合分类器")
+                self.lightweight_classifier = None
 
-            # 加载BERT模型（备选方法）
-            self._load_bert_model()
+            # 初始化混合分类器（备选方法）
+            if not self.lightweight_classifier:
+                try:
+                    from .hybrid_classifier import HybridIntentClassifier
+                    self.hybrid_classifier = HybridIntentClassifier(lazy_load=True)
+                    logger.info("混合意图分类器初始化成功")
+                except Exception as e:
+                    logger.warning(f"混合分类器初始化失败: {e}，将使用BERT模型")
+                    self.hybrid_classifier = None
+
+            # 加载BERT模型（最后备选方法）
+            if not self.lightweight_classifier and not self.hybrid_classifier:
+                self._load_bert_model()
             self._models_loaded = True
 
     def _load_bert_model(self):
@@ -94,7 +106,16 @@ class IntentClassifier:
         if self.lazy_load:
             self._ensure_models_loaded()
 
-        # 优先使用混合分类器
+        # 优先使用轻量级分类器
+        if self.lightweight_classifier:
+            try:
+                result = self.lightweight_classifier.predict(text)
+                logger.debug(f"轻量级分类器预测: '{text}' -> {result}")
+                return result
+            except Exception as e:
+                logger.warning(f"轻量级分类器预测失败: {e}，回退到混合分类器")
+
+        # 回退到混合分类器
         if self.hybrid_classifier:
             try:
                 result = self.hybrid_classifier.predict(text)
@@ -103,7 +124,7 @@ class IntentClassifier:
             except Exception as e:
                 logger.warning(f"混合分类器预测失败: {e}，回退到BERT模型")
 
-        # 回退到BERT模型
+        # 最后回退到BERT模型
         if not self.model or not self.tokenizer or not self.label_map:
             logger.warning("所有意图分类器都不可用，返回 'unknown'。")
             return 'unknown'

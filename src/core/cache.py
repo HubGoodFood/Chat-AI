@@ -5,18 +5,21 @@ import hashlib
 import logging
 from functools import wraps
 from datetime import datetime, timedelta
+from typing import Optional, Any
 
 # 配置日志
 logger = logging.getLogger(__name__)
 
 class CacheManager:
-    """缓存管理器，提供多种缓存机制"""
-    
-    def __init__(self, cache_dir="cache"):
+    """缓存管理器，提供多种缓存机制，支持Redis分布式缓存"""
+
+    def __init__(self, cache_dir="cache", enable_redis=True, redis_url=None):
         """初始化缓存管理器
-        
+
         Args:
             cache_dir (str): 缓存文件存储目录
+            enable_redis (bool): 是否启用Redis缓存
+            redis_url (str): Redis连接URL
         """
         self.cache_dir = cache_dir
         self.memory_cache = {}
@@ -25,7 +28,25 @@ class CacheManager:
         self.llm_cache_file = os.path.join(cache_dir, "llm_responses.json")
         self.session_cache = {}  # 内存中的会话缓存 {user_id: {context_data}}
         self.ttl_cache = {}  # 带过期时间的缓存 {key: (value, expiry_time)}
-        
+
+        # Redis缓存支持
+        self.redis_cache = None
+        self.enable_redis = enable_redis
+
+        if enable_redis:
+            self._init_redis_cache(redis_url)
+
+    def _init_redis_cache(self, redis_url: Optional[str] = None):
+        """初始化Redis缓存"""
+        try:
+            from .redis_cache import RedisCacheManager
+            self.redis_cache = RedisCacheManager(redis_url=redis_url)
+            logger.info("Redis缓存已启用")
+        except Exception as e:
+            logger.warning(f"Redis缓存初始化失败，将使用本地缓存: {e}")
+            self.redis_cache = None
+            self.enable_redis = False
+
     def ensure_cache_dir(self):
         """确保缓存目录存在"""
         if not os.path.exists(self.cache_dir):
@@ -165,17 +186,27 @@ class CacheManager:
     
     def get_llm_cached_response(self, user_input, context=None):
         """获取缓存的LLM响应
-        
+
         Args:
             user_input (str): 用户输入
             context (str, optional): 上下文信息
-            
+
         Returns:
             str: 缓存的响应，如果未命中缓存则返回None
         """
         cache_key = self._generate_cache_key(user_input, context)
-        
-        # 先检查内存缓存
+
+        # 优先检查Redis缓存
+        if self.redis_cache:
+            try:
+                cached_response = self.redis_cache.get(cache_key, prefix="llm")
+                if cached_response:
+                    logger.debug(f"LLM响应Redis缓存命中: {user_input[:30]}...")
+                    return cached_response
+            except Exception as e:
+                logger.error(f"Redis缓存获取失败: {e}")
+
+        # 检查内存缓存
         cache_entry = self.ttl_cache.get(cache_key)
         if cache_entry:
             value, expiry = cache_entry
@@ -185,19 +216,19 @@ class CacheManager:
             else:
                 # 过期，从内存缓存中移除
                 self.ttl_cache.pop(cache_key, None)
-        
+
         # 检查文件缓存
         if not os.path.exists(self.llm_cache_file):
             return None
-            
+
         try:
             with open(self.llm_cache_file, 'r', encoding='utf-8') as f:
                 cache_data = json.load(f)
-                
+
             entry = cache_data.get(cache_key)
             if not entry or time.time() > entry.get("expiry", 0):
                 return None
-                
+
             # 更新内存缓存
             self.ttl_cache[cache_key] = (entry["response"], entry["expiry"])
             logger.debug(f"LLM响应文件缓存命中: {user_input[:30]}...")
@@ -208,7 +239,7 @@ class CacheManager:
     
     def cache_llm_response(self, user_input, response, context=None, ttl_hours=24):
         """缓存LLM响应
-        
+
         Args:
             user_input (str): 用户输入
             response (str): LLM响应
@@ -217,10 +248,19 @@ class CacheManager:
         """
         cache_key = self._generate_cache_key(user_input, context)
         expiry = time.time() + ttl_hours * 3600
-        
+        ttl_seconds = ttl_hours * 3600
+
+        # 优先缓存到Redis
+        if self.redis_cache:
+            try:
+                self.redis_cache.set(cache_key, response, ttl=ttl_seconds, prefix="llm")
+                logger.debug(f"LLM响应已缓存到Redis: {user_input[:30]}...")
+            except Exception as e:
+                logger.error(f"Redis缓存设置失败: {e}")
+
         # 更新内存缓存
         self.ttl_cache[cache_key] = (response, expiry)
-        
+
         # 更新文件缓存
         try:
             if os.path.exists(self.llm_cache_file):
@@ -228,18 +268,18 @@ class CacheManager:
                     cache_data = json.load(f)
             else:
                 cache_data = {}
-                
+
             cache_data[cache_key] = {
                 "response": response,
                 "expiry": expiry,
                 "user_input": user_input,
                 "timestamp": time.time()
             }
-            
+
             with open(self.llm_cache_file, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, ensure_ascii=False, indent=2)
-            
-            logger.debug(f"LLM响应已缓存: {user_input[:30]}...")
+
+            logger.debug(f"LLM响应已缓存到文件: {user_input[:30]}...")
         except Exception as e:
             logger.error(f"缓存LLM响应失败: {e}")
     
@@ -311,6 +351,56 @@ class CacheManager:
             
         if expired_keys or expired_sessions:
             logger.debug(f"已清除 {len(expired_keys) + len(expired_sessions)} 个过期缓存条目")
+
+    def get_cache_stats(self) -> dict:
+        """获取缓存统计信息"""
+        stats = {
+            'memory_cache_size': len(self.memory_cache),
+            'ttl_cache_size': len(self.ttl_cache),
+            'session_cache_size': len(self.session_cache),
+            'redis_enabled': self.enable_redis,
+            'redis_available': self.redis_cache is not None
+        }
+
+        # 获取Redis统计
+        if self.redis_cache:
+            try:
+                redis_stats = self.redis_cache.get_stats()
+                stats.update({f'redis_{k}': v for k, v in redis_stats.items()})
+            except Exception as e:
+                logger.error(f"获取Redis统计失败: {e}")
+
+        return stats
+
+    def health_check(self) -> dict:
+        """缓存系统健康检查"""
+        health = {
+            'status': 'healthy',
+            'memory_cache': True,
+            'file_cache': os.path.exists(self.cache_dir),
+            'redis_cache': False,
+            'issues': []
+        }
+
+        # 检查Redis健康状态
+        if self.redis_cache:
+            try:
+                redis_health = self.redis_cache.health_check()
+                health['redis_cache'] = redis_health.get('redis_available', False)
+                if not health['redis_cache']:
+                    health['issues'].append('Redis连接不可用')
+            except Exception as e:
+                health['issues'].append(f'Redis健康检查失败: {e}')
+
+        # 检查缓存目录
+        if not health['file_cache']:
+            health['issues'].append('缓存目录不存在')
+
+        # 设置总体状态
+        if health['issues']:
+            health['status'] = 'degraded' if health['memory_cache'] else 'unhealthy'
+
+        return health
 
 
 # 装饰器：函数结果缓存

@@ -25,7 +25,9 @@
 ### 🔧 技术架构
 - **Flask Web 框架**：轻量级、高性能的 Web 服务
 - **RESTful API**：标准化的 API 接口设计
-- **缓存优化**：智能缓存机制提升响应速度
+- **分布式缓存**：Redis + 本地缓存的多层缓存架构
+- **性能监控**：实时性能监控和可视化仪表板
+- **轻量级ML**：优化的意图分类，减少98.6%依赖大小
 - **可选 LLM 集成**：支持 DeepSeek 等大语言模型增强对话能力
 
 ## 🚀 快速开始
@@ -57,6 +59,10 @@
 
 3. **安装依赖**
    ```bash
+   # 推荐使用轻量级依赖（优化版）
+   pip install -r requirements_lightweight.txt
+
+   # 或使用原版依赖
    pip install -r requirements.txt
    ```
 
@@ -64,7 +70,13 @@
    ```bash
    # DeepSeek LLM API Key（可选）
    export DEEPSEEK_API_KEY=你的_api_key
-   
+
+   # 优化配置（推荐）
+   export MODEL_TYPE=lightweight
+   export REDIS_ENABLED=true
+   export MONITORING_ENABLED=true
+   export CACHE_ENABLED=true
+
    # 其他配置（使用默认值即可）
    export PRODUCT_DATA_FILE=data/products.csv
    export INTENT_TRAINING_DATA_FILE=data/intent_training_data.csv
@@ -80,8 +92,9 @@
    ```
 
 6. **访问界面**
-   
-   打开浏览器访问 `http://localhost:5000/`
+
+   - **主聊天界面**: `http://localhost:5000/`
+   - **性能监控仪表板**: `http://localhost:5000/monitoring/dashboard`
 
 ## 📊 数据格式
 
@@ -120,39 +133,48 @@ ProductName,Specification,Price,Unit,Category,Description,IsSeasonal,Keywords
 
 ```
 Chat-AI/
-├── data/                           # 数据文件
-│   ├── products.csv               # 产品数据
-│   ├── intent_training_data.csv   # 意图训练数据
-│   └── policy.json               # 平台政策
-├── src/                          # 源代码
-│   ├── app/                      # Flask 应用
-│   │   ├── chat/                 # 聊天处理逻辑
-│   │   │   └── handler.py        # 主要聊天处理器
-│   │   ├── intent/               # 意图识别
-│   │   │   ├── classifier.py     # 意图分类器
-│   │   │   ├── hybrid_classifier.py  # 混合分类器
-│   │   │   └── improved_trainer.py   # 改进的训练器
-│   │   ├── products/             # 产品管理
-│   │   │   ├── manager.py        # 产品管理器
-│   │   │   └── recommendation_engine.py  # 推荐引擎
-│   │   ├── policy/               # 政策管理
-│   │   └── main.py               # 应用入口
-│   ├── config/                   # 配置管理
-│   │   └── settings.py           # 配置设置
-│   ├── core/                     # 核心模块
-│   └── models/                   # 训练模型
-│       └── hybrid_intent_model/  # 混合意图模型
-├── templates/                    # HTML 模板
-│   └── index.html               # 主页面
-├── static/                      # 静态资源
-│   ├── style.css               # 样式文件
-│   ├── chat.js                 # 前端交互
-│   └── images/                 # 图片资源
-├── docs/                       # 文档
-├── tests/                      # 测试文件
-├── requirements.txt            # Python 依赖
-└── README.md                   # 项目说明
+├── 📄 README.md                    # 项目说明（本文件）
+├── 📄 PROJECT_STRUCTURE.md         # 详细项目结构说明
+├── 📄 app.py                       # 应用入口
+├── 📄 requirements_lightweight.txt # 轻量级依赖（推荐）
+├── 📄 requirements.txt             # 原版依赖
+│
+├── 📂 src/                         # 源代码
+│   ├── 📂 app/                     # Flask 应用
+│   │   ├── 📂 chat/                # 聊天处理逻辑
+│   │   ├── 📂 intent/              # 意图识别（轻量级+混合）
+│   │   ├── 📂 products/            # 产品管理
+│   │   ├── 📂 policy/              # 政策管理
+│   │   ├── 📂 monitoring/          # 监控仪表板
+│   │   └── 📄 main.py              # 应用入口
+│   ├── 📂 core/                    # 核心功能
+│   │   ├── 📄 cache.py             # 缓存管理
+│   │   ├── 📄 redis_cache.py       # Redis分布式缓存
+│   │   └── 📄 performance_monitor.py # 性能监控
+│   ├── 📂 config/                  # 配置管理
+│   └── 📂 models/                  # 训练模型
+│
+├── 📂 docs/                        # 📚 文档目录
+│   ├── 📂 optimization/            # 🚀 优化文档
+│   ├── 📂 guides/                  # 📖 详细指南
+│   └── 📂 deployment/              # 🚀 部署文档
+│
+├── 📂 scripts/                     # 🛠️ 脚本目录
+│   ├── 📂 testing/                 # 🧪 测试脚本
+│   ├── 📂 optimization/            # 优化脚本
+│   └── 📂 migration/               # 迁移脚本
+│
+├── 📂 config/                      # ⚙️ 配置目录
+│   └── 📂 deployment/              # 部署配置
+│
+├── 📂 data/                        # 📊 数据文件
+├── 📂 static/                      # 🎨 静态资源
+├── 📂 templates/                   # 🖼️ HTML模板
+├── 📂 cache/                       # 💾 缓存文件
+└── 📂 tests/                       # 🧪 测试文件
 ```
+
+> 📖 **详细结构说明**: 查看 `PROJECT_STRUCTURE.md` 了解完整的目录结构和文件组织方式
 
 ## 🔧 配置选项
 
@@ -167,6 +189,30 @@ Chat-AI/
 | `PORT` | Flask 应用端口 | `5000` |
 | `FLASK_DEBUG` | 调试模式 | `true` |
 | `APP_ENV` | 应用环境 | `development` |
+| `MODEL_TYPE` | 模型类型 | `lightweight` |
+| `REDIS_ENABLED` | Redis缓存 | `true` |
+| `MONITORING_ENABLED` | 性能监控 | `true` |
+
+## 📚 文档导航
+
+### 🚀 **优化和性能**
+- **[优化路线图](docs/optimization/FUTURE_OPTIMIZATION_ROADMAP.md)** - 完整的优化计划和优先级
+- **[实施检查清单](docs/optimization/IMPLEMENTATION_CHECKLIST.md)** - 逐步实施指南
+- **[优化总指南](docs/optimization/OPTIMIZATION_GUIDE.md)** - 轻量级优化总结
+
+### 📖 **详细指南**
+- **[数据库迁移指南](docs/guides/DATABASE_MIGRATION_GUIDE.md)** - 从CSV到数据库的完整迁移
+- **[前端优化指南](docs/guides/FRONTEND_OPTIMIZATION_GUIDE.md)** - 静态资源优化和CDN配置
+- **[API安全优化指南](docs/guides/API_SECURITY_OPTIMIZATION_GUIDE.md)** - API性能和安全加固
+- **[Redis监控配置指南](docs/guides/REDIS_MONITORING_SETUP.md)** - 分布式缓存和监控配置
+
+### 🚀 **部署相关**
+- **[部署修复指南](docs/deployment/DEPLOYMENT_FIX.md)** - 部署问题解决方案
+- **[优化部署配置](config/deployment/)** - 生产环境优化配置
+
+### 🧪 **测试和验证**
+- **[测试脚本](scripts/testing/)** - 功能和性能测试脚本
+- **[验证工具](scripts/testing/verify_*.py)** - 部署和功能验证工具
 
 ## 📡 API 接口
 

@@ -10,10 +10,17 @@ import os
 import logging
 import time
 
-# 设置环境变量以优化模型加载
+# 设置环境变量以优化轻量级模型加载
 os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
-os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')
-os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
+os.environ.setdefault('PYTHONUNBUFFERED', '1')
+os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
+os.environ.setdefault('MODEL_TYPE', 'lightweight')
+os.environ.setdefault('LAZY_LOADING', 'true')
+
+# 仅在使用重型模型时设置这些变量
+if os.environ.get('MODEL_TYPE') != 'lightweight':
+    os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')
+    os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
 
 # 配置基本日志
 logging.basicConfig(
