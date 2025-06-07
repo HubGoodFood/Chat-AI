@@ -11,7 +11,7 @@ from typing import Tuple, Optional, Dict, Any, Union
 from src.core.cache import CacheManager
 from src.app.products.manager import ProductManager
 from src.app.policy.manager import PolicyManager
-from src.app.intent.classifier import IntentClassifier
+from src.app.intent.lightweight_classifier import LightweightIntentClassifier
 import random
 
 # 配置日志
@@ -32,7 +32,7 @@ class ChatHandler:
         self.product_manager = product_manager
         self.policy_manager = policy_manager or PolicyManager(lazy_load=True)  # 使用懒加载
         self.cache_manager = cache_manager or CacheManager()
-        self.intent_classifier = IntentClassifier(model_path="src/models/intent_model", lazy_load=True) # 使用懒加载
+        self.intent_classifier = LightweightIntentClassifier(lazy_load=True) # 使用轻量级分类器
         
         # 用户会话状态
         self.user_sessions = {}  # {user_id: session_data}
@@ -227,7 +227,8 @@ class ChatHandler:
 
                 # 反向匹配：检查查询中的产品关键词是否在产品名称中
                 # 这对于"梨有？"匹配"雪花梨蜜梨"这种情况很有用
-                query_clean = query.replace('有？', '').replace('有?', '').replace('有吗', '').replace('卖吗', '').replace('卖不卖', '').replace('有没有', '').strip()
+                # 使用更智能的清洗逻辑，处理各种查询模式
+                query_clean = self._smart_clean_query_for_reverse_match(query)
                 if query_clean and len(query_clean) >= 1:
                     for name in [product_name, original_name]:
                         if name and query_clean.lower() in name.lower():
@@ -277,6 +278,62 @@ class ChatHandler:
             return query
 
         logger.debug(f"查询清洗: '{query}' -> '{cleaned_query}'")
+        return cleaned_query
+
+    def _smart_clean_query_for_reverse_match(self, query: str) -> str:
+        """
+        智能清洗查询用于反向匹配，处理各种查询模式
+
+        Args:
+            query (str): 原始查询
+
+        Returns:
+            str: 清洗后的产品关键词
+        """
+        # 定义需要移除的模式（按优先级排序）
+        patterns_to_remove = [
+            # 开头的询问词
+            r'^你们\s*',           # "你们"
+            r'^我们\s*',           # "我们"
+            r'^这里\s*',           # "这里"
+            r'^请问\s*',           # "请问"
+
+            # 询问模式（开头）
+            r'^卖不卖\s*',         # "卖不卖"
+            r'^有没有\s*',         # "有没有"
+            r'^有不有\s*',         # "有不有"
+            r'^卖不\s*',           # "卖不"
+            r'^有不\s*',           # "有不"
+            r'^有\s*',             # "有"
+
+            # 询问模式（结尾）
+            r'\s*卖不卖[\?？!！。]*$',   # "卖不卖"
+            r'\s*有没有[\?？!！。]*$',   # "有没有"
+            r'\s*有不有[\?？!！。]*$',   # "有不有"
+            r'\s*卖不[\?？!！。]*$',     # "卖不"
+            r'\s*有不[\?？!！。]*$',     # "有不"
+            r'\s*卖吗[\?？!！。]*$',     # "卖吗"
+            r'\s*有吗[\?？!！。]*$',     # "有吗"
+            r'\s*有[\?？!！。]*$',       # "有？"
+            r'\s*吗[\?？!！。]*$',       # "吗"
+            r'\s*呢[\?？!！。]*$',       # "呢"
+            r'\s*啊[\?？!！。]*$',       # "啊"
+        ]
+
+        cleaned_query = query
+        for pattern in patterns_to_remove:
+            cleaned_query = re.sub(pattern, '', cleaned_query, flags=re.IGNORECASE)
+
+        cleaned_query = cleaned_query.strip()
+
+        # 如果清洗后为空或太短，尝试更简单的清洗
+        if not cleaned_query or len(cleaned_query) < 1:
+            # 简单的字符串替换作为回退
+            simple_clean = query.replace('你们', '').replace('卖不卖', '').replace('有没有', '').replace('有吗', '').replace('卖吗', '').replace('有？', '').replace('有?', '').strip()
+            if simple_clean and len(simple_clean) >= 1:
+                return simple_clean
+            return query
+
         return cleaned_query
 
     def detect_intent(self, user_input_processed: str) -> str:
@@ -332,11 +389,12 @@ class ChatHandler:
         if any(pattern in user_input_processed for pattern in policy_patterns):
             return 'inquiry_policy'
 
-        # --- 模型预测：如果不是明确的规则匹配，则使用模型 ---
-        if self.intent_classifier and self.intent_classifier.model:
+        # --- 模型预测：如果不是明确的规则匹配，则使用轻量级分类器 ---
+        if self.intent_classifier:
             predicted_intent = self.intent_classifier.predict(user_input_processed)
             # 如果模型给出了一个明确的意图（不是unknown），则使用它
             if predicted_intent != 'unknown':
+                logger.debug(f"轻量级分类器预测意图: '{user_input_processed}' -> {predicted_intent}")
                 return predicted_intent
         
         # --- 模型不可用或预测为 'unknown' 时的回退规则 ---
@@ -1061,13 +1119,21 @@ class ChatHandler:
                     # 构建更友好的提问消息
                     product_names_for_clarification = "、".join([f"[{opt['display_text']}]" for opt in clarification_options_list])
                     clarification_message = f"您好，关于您咨询的产品，我找到了几个相似的：您是指 {product_names_for_clarification} 呢？请点击选择。"
-                    final_response = {"message": clarification_message, "clarification_options": clarification_options_list}
+
+                    # 模糊查询处理：只显示澄清按钮，不显示推荐按钮
+                    final_response = {
+                        "message": clarification_message,
+                        "clarification_options": clarification_options_list,
+                        "product_suggestions": []  # 模糊查询时不显示推荐按钮
+                    }
+
                     new_general_context_key = None
                     new_bot_mention_payload_for_next_turn = None # Clarification awaits user, no bot mention yet
                     intent_handled = True
                 else: # No clarification needed, process top_match_key
                     product_details = self.product_manager.product_catalog.get(top_match_key)
                     if not product_details:
+                        # 精确匹配但产品详情获取失败时，返回字符串格式
                         final_response = "抱歉，查找产品信息时出了一点小问题。"
                         intent_handled = True
                         new_bot_mention_payload_for_next_turn = None
@@ -1206,8 +1272,12 @@ class ChatHandler:
                             ]
                             response_parts.append(random.choice(closing_phrases))
                         
-                        final_response = "\n".join(response_parts)
-                        
+                        # 构建基础回复消息
+                        base_response = "\n".join(response_parts)
+
+                        # 精确匹配处理：返回字符串格式，不显示任何按钮
+                        final_response = base_response
+
                         new_general_context_key = top_match_key
                         # Bot is "mentioning" this product by confirming its details/price
                         new_bot_mention_payload_for_next_turn = {
@@ -1221,7 +1291,11 @@ class ChatHandler:
         
         if not intent_handled: # Should only be reached if product_catalog is empty initially
             logger.warning(f"Price_or_buy intent for '{user_input_processed}' could not be handled (e.g. empty catalog).")
-            final_response = "抱歉，我们的产品信息似乎还没有准备好，请稍后再试。"
+            # 即使产品目录为空也返回字典格式以保持一致性
+            final_response = {
+                'message': "抱歉，我们的产品信息似乎还没有准备好，请稍后再试。",
+                'product_suggestions': []
+            }
             intent_handled = True # Mark as handled to prevent LLM fallback on this specific error
             new_general_context_key = None
             new_bot_mention_payload_for_next_turn = None
@@ -1229,11 +1303,12 @@ class ChatHandler:
         logger.debug(f"handle_price_or_buy is about to return: intent_handled={intent_handled}, final_response_type={type(final_response)}")
         return final_response, intent_handled, new_general_context_key, new_bot_mention_payload_for_next_turn
 
-    def handle_llm_fallback(self, user_input: str, user_input_processed: str, user_id: str) -> Tuple[str, Optional[Dict]]:
+    def handle_llm_fallback(self, user_input: str, user_input_processed: str, user_id: str) -> Tuple[Union[str, Dict[str, Any]], Optional[Dict]]:
         """当规则无法处理用户输入时，调用LLM进行回复。
 
         会构建包含系统提示、先前识别的产品（如有）和部分相关产品列表的上下文给LLM。
         现在还会尝试从LLM的回复中提取提及的产品信息。
+        如果LLM回复中提到了多个产品，会返回带有产品建议按钮的字典格式。
 
         Args:
             user_input (str): 原始用户输入。
@@ -1241,7 +1316,7 @@ class ChatHandler:
             user_id (str): 用户ID。
 
         Returns:
-            Tuple[str, Optional[Dict]]: (LLM生成的回复, 可能提取到的产品payload)
+            Tuple[Union[str, Dict[str, Any]], Optional[Dict]]: (LLM生成的回复或包含按钮的字典, 可能提取到的产品payload)
         """
         session = self.get_user_session(user_id)
         final_response = ""
@@ -1402,44 +1477,69 @@ class ChatHandler:
             logger.error(f"调用 LLM API 失败: {e}")
             final_response = "抱歉，AI助手暂时遇到问题，请稍后再试。"
 
-        # 尝试从LLM的回复中提取产品信息
+        # 尝试从LLM的回复中提取产品信息并生成产品建议按钮
         if final_response and not any(err_msg in final_response for err_msg in ["抱歉", "无法"]):
             if self.product_manager.product_catalog:
-                price_keywords_in_llm_response = ["价格", "价钱", "多少钱", "元", "$", "块", "售价是", "卖"]
                 llm_response_lower = final_response.lower()
-                
-                best_match_product_key = None
-                longest_match_len = 0
+                mentioned_products = []
 
+                # 查找所有在回复中提到的产品
                 for key, details in self.product_manager.product_catalog.items():
                     product_name_variants = []
                     if details.get('original_display_name'):
                         product_name_variants.append(details.get('original_display_name').lower())
                     if details.get('name'):
                          product_name_variants.append(details.get('name').lower())
-                    
+
                     # Ensure product names are non-empty and have a minimum length (e.g., 2)
                     product_name_variants = list(set(name for name in product_name_variants if name and len(name) >= 2))
 
                     for name_variant in product_name_variants:
                         if name_variant in llm_response_lower:
-                            # Check if the response also contains price-related keywords
-                            contains_price_keyword_in_reply = any(pk_word in llm_response_lower for pk_word in price_keywords_in_llm_response)
-                            if contains_price_keyword_in_reply:
-                                if len(name_variant) > longest_match_len:
-                                    longest_match_len = len(name_variant)
-                                    best_match_product_key = key
-                
-                if best_match_product_key:
-                    product_details_llm = self.product_manager.product_catalog.get(best_match_product_key)
-                    if product_details_llm:
-                        extracted_product_payload = {
-                            'key': best_match_product_key,
-                            'name': product_details_llm.get('original_display_name') or product_details_llm.get('name'),
-                            'price': product_details_llm.get('price'),
-                            'specification': product_details_llm.get('specification'),
-                            'description': product_details_llm.get('description')
-                        }
-                        logger.info(f"LLM fallback response potentially mentioned product: {extracted_product_payload['name']}")
-        
+                            mentioned_products.append((key, details, len(name_variant)))
+                            break  # 避免同一产品重复添加
+
+                # 按名称长度排序，优先选择更具体的匹配
+                mentioned_products.sort(key=lambda x: x[2], reverse=True)
+
+                # 如果找到多个产品（2个或以上），生成产品建议按钮
+                if len(mentioned_products) >= 2:
+                    product_suggestions = []
+                    for key, details, _ in mentioned_products[:config.MAX_PRODUCT_SUGGESTIONS_BUTTONS]:
+                        product_name = details.get('original_display_name', details.get('name', '未知产品'))
+                        price = details.get('price', 0)
+                        specification = details.get('specification', '份')
+
+                        # 构建显示文本
+                        display_text = product_name
+                        if price > 0:
+                            display_text += f" (${price:.2f}/{specification})"
+
+                        product_suggestions.append({
+                            'display_text': display_text,
+                            'payload': key
+                        })
+
+                    # 在回复末尾添加选择提示
+                    enhanced_response = final_response + "\n\n您可以点击上面的产品按钮直接选择，或者告诉我您对哪个感兴趣！"
+
+                    # 返回字典格式
+                    return {
+                        'message': enhanced_response,
+                        'product_suggestions': product_suggestions
+                    }, None
+
+                # 如果只找到一个产品，提取为上下文但不生成按钮
+                elif len(mentioned_products) == 1:
+                    key, details, _ = mentioned_products[0]
+                    extracted_product_payload = {
+                        'key': key,
+                        'name': details.get('original_display_name') or details.get('name'),
+                        'price': details.get('price'),
+                        'specification': details.get('specification'),
+                        'description': details.get('description')
+                    }
+                    logger.info(f"LLM fallback response potentially mentioned product: {extracted_product_payload['name']}")
+                    return final_response, extracted_product_payload
+
         return final_response, extracted_product_payload

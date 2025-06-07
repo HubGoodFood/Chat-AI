@@ -63,19 +63,19 @@ class LightweightIntentClassifier:
                 r'质量问题.*怎么',
                 r'怎么.*退款'
             ],
-            'product_availability': [
+            'inquiry_availability': [
                 r'(卖不卖|有没有|有吗|卖不|有不|有木有|卖吗)',
                 r'(能买到|买得到|有卖|在卖|供应|现货)',
                 r'.*有.*吗[？?]?$',
                 r'.*卖.*吗[？?]?$'
             ],
-            'product_price': [
+            'inquiry_price_or_buy': [
                 r'(多少钱|价格|什么价|几多钱|售价)',
                 r'.*多少.*钱',
                 r'.*价格.*是',
                 r'.*什么.*价'
             ],
-            'product_recommendation': [
+            'request_recommendation': [
                 r'(推荐|介绍点|什么好吃|什么值得买|有什么好)',
                 r'(当季|新鲜|时令)',
                 r'推荐.*什么',
@@ -92,14 +92,14 @@ class LightweightIntentClassifier:
     def _build_keyword_patterns(self) -> Dict[str, List[str]]:
         """构建关键词匹配模式（兜底策略）"""
         return {
-            'product_query': [
-                '苹果', '梨', '香蕉', '橙子', '葡萄', '西瓜', '草莓',
+            'inquiry_availability': [
+                '苹果', '梨', '香蕉', '橙子', '葡萄', '西瓜', '草莓', '香瓜', '蓝莓',
                 '白菜', '萝卜', '土豆', '番茄', '黄瓜', '茄子',
-                '鸡', '鸭', '鱼', '虾', '蟹', '肉'
+                '鸡', '鸭', '鱼', '虾', '蟹', '肉', '鸡肉'
             ],
             'greeting': ['你好', '您好', 'hi', 'hello'],
-            'price_query': ['钱', '价格', '价', '费用'],
-            'policy_query': ['政策', '规定', '配送', '付款', '退款']
+            'inquiry_price_or_buy': ['钱', '价格', '价', '费用'],
+            'inquiry_policy': ['政策', '规定', '配送', '付款', '退款']
         }
 
     def _ensure_model_loaded(self):

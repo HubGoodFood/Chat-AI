@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+from datetime import datetime
 # Add the project root directory to sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
 if PROJECT_ROOT not in sys.path:
@@ -131,6 +132,42 @@ def health_check():
     }
 
     return jsonify(health_status), 200
+
+@app.route('/admin/clear-cache', methods=['POST'])
+def clear_cache():
+    """清除所有缓存"""
+    try:
+        # 清除Redis缓存
+        if cache_manager.redis_cache:
+            cache_manager.redis_cache.clear_prefix("llm")
+            cache_manager.redis_cache.clear_prefix("chatai")
+
+        # 清除Redis内存缓存
+        if hasattr(cache_manager.redis_cache, 'memory_cache'):
+            cache_manager.redis_cache.memory_cache.clear()
+
+        # 清除CacheManager的内存缓存
+        if hasattr(cache_manager, 'ttl_cache'):
+            cache_manager.ttl_cache.clear()
+
+        if hasattr(cache_manager, 'memory_cache'):
+            cache_manager.memory_cache.clear()
+
+        if hasattr(cache_manager, 'session_cache'):
+            cache_manager.session_cache.clear()
+
+        return jsonify({
+            "status": "success",
+            "message": "所有缓存已清除",
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"清除缓存失败: {e}")
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 @app.route('/')
 def index():

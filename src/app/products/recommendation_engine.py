@@ -89,58 +89,113 @@ class ProductRecommendationEngine:
             "软糯": ["糯", "软", "松软", "软糯", "粉糯"]
         }
 
-    def find_similar_products(self, 
-                            query_product_name: str, 
+    def find_similar_products(self,
+                            query_product_name: str,
                             target_category: Optional[str] = None,
                             max_recommendations: int = 3) -> List[ProductRecommendation]:
         """
         查找相似产品
-        
+
         Args:
             query_product_name: 用户查询的产品名称
             target_category: 目标类别（如果已知）
             max_recommendations: 最大推荐数量
-            
+
         Returns:
             推荐产品列表
         """
         if not self.product_manager.product_catalog:
             return []
-            
+
         recommendations = []
-        
+
         # 1. 首先尝试基于类别匹配
         if target_category:
             category_matches = self._find_by_category(target_category, max_recommendations)
             recommendations.extend(category_matches)
-        
-        # 2. 如果没有指定类别，尝试推断类别
-        if not target_category:
-            inferred_category = self.product_manager.find_related_category(query_product_name)
-            if inferred_category:
-                category_matches = self._find_by_category(inferred_category, max_recommendations)
-                recommendations.extend(category_matches)
-        
-        # 3. 基于关键词和名称相似性匹配
+
+        # 2. 如果基于类别没有找到足够的推荐，尝试模糊匹配
         if len(recommendations) < max_recommendations:
-            keyword_matches = self._find_by_keywords(query_product_name, max_recommendations - len(recommendations))
-            recommendations.extend(keyword_matches)
-        
-        # 4. 如果仍然不足，添加热门和当季产品
+            similar_products = self.product_manager.find_similar_products(
+                query_product_name, threshold=0.2  # 降低阈值以获得更多匹配
+            )
+
+            for product_key, product_details in similar_products:
+                if len(recommendations) >= max_recommendations:
+                    break
+
+                # 避免重复推荐
+                if not any(rec.product_key == product_key for rec in recommendations):
+                    recommendations.append(ProductRecommendation(
+                        product_key=product_key,
+                        product_details=product_details,
+                        similarity_score=0.7,
+                        recommendation_reason="相似产品推荐",
+                        category_group=product_details.get('category', '其他')
+                    ))
+
+        # 3. 如果仍然没有足够的推荐，添加热门产品
         if len(recommendations) < max_recommendations:
-            fallback_matches = self._find_fallback_products(max_recommendations - len(recommendations), target_category)
-            recommendations.extend(fallback_matches)
-        
-        # 去重并按相似度排序
-        seen_keys = set()
-        unique_recommendations = []
-        for rec in recommendations:
-            if rec.product_key not in seen_keys:
-                unique_recommendations.append(rec)
-                seen_keys.add(rec.product_key)
-                
-        unique_recommendations.sort(key=lambda x: x.similarity_score, reverse=True)
-        return unique_recommendations[:max_recommendations]
+            popular_products = self.product_manager.get_popular_products(
+                limit=max_recommendations - len(recommendations),
+                category=target_category
+            )
+
+            for product_key, product_details in popular_products:
+                # 避免重复推荐
+                if not any(rec.product_key == product_key for rec in recommendations):
+                    recommendations.append(ProductRecommendation(
+                        product_key=product_key,
+                        product_details=product_details,
+                        similarity_score=0.6,
+                        recommendation_reason="热门推荐",
+                        category_group=product_details.get('category', '其他')
+                    ))
+
+        # 4. 如果还是没有足够的推荐，添加当季产品
+        if len(recommendations) < max_recommendations:
+            seasonal_products = self.product_manager.get_seasonal_products(
+                limit=max_recommendations - len(recommendations),
+                category=target_category
+            )
+
+            for product_key, product_details in seasonal_products:
+                # 避免重复推荐
+                if not any(rec.product_key == product_key for rec in recommendations):
+                    recommendations.append(ProductRecommendation(
+                        product_key=product_key,
+                        product_details=product_details,
+                        similarity_score=0.5,
+                        recommendation_reason="当季推荐",
+                        category_group=product_details.get('category', '其他')
+                    ))
+
+        # 5. 最后的备用方案：随机选择一些产品
+        if len(recommendations) < max_recommendations:
+            all_products = list(self.product_manager.product_catalog.items())
+            import random
+            random.shuffle(all_products)
+
+            for product_key, product_details in all_products:
+                if len(recommendations) >= max_recommendations:
+                    break
+
+                # 避免重复推荐
+                if not any(rec.product_key == product_key for rec in recommendations):
+                    # 如果指定了类别，优先选择该类别的产品
+                    if target_category and product_details.get('category', '').lower() != target_category.lower():
+                        continue
+
+                    recommendations.append(ProductRecommendation(
+                        product_key=product_key,
+                        product_details=product_details,
+                        similarity_score=0.4,
+                        recommendation_reason="为您推荐",
+                        category_group=product_details.get('category', '其他')
+                    ))
+
+        return recommendations[:max_recommendations]
+
 
     def _find_by_category(self, category: str, limit: int) -> List[ProductRecommendation]:
         """基于类别查找产品"""

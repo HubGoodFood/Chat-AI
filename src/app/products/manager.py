@@ -81,8 +81,15 @@ class ProductManager:
                 reader = csv.DictReader(csvfile)
                 logger.debug(f"CSV Headers read by DictReader: {reader.fieldnames}")
                 
-                # 检查是否有必要的列
-                fieldnames_lower = [fn.lower() for fn in (reader.fieldnames or [])]
+                # 检查是否有必要的列，并创建列名映射
+                fieldnames_clean = [fn.strip() for fn in (reader.fieldnames or [])]
+                fieldnames_lower = [fn.lower() for fn in fieldnames_clean]
+
+                # 创建原始列名到清理后列名的映射
+                column_mapping = {}
+                for original, clean in zip(reader.fieldnames or [], fieldnames_clean):
+                    column_mapping[clean] = original
+
                 has_description = 'description' in fieldnames_lower
                 has_seasonal = 'isseasonal' in fieldnames_lower
                 has_keywords = 'keywords' in fieldnames_lower
@@ -90,32 +97,68 @@ class ProductManager:
                 has_origin = 'origin' in fieldnames_lower
                 has_benefits = 'benefits' in fieldnames_lower
                 has_suitablefor = 'suitablefor' in fieldnames_lower
-                
+
                 # Ensure basic columns are present, checking against lowercased fieldnames for robustness
                 required_cols_lower = ['productname', 'specification', 'price', 'unit', 'category']
                 if not reader.fieldnames or not all(col_req.lower() in fieldnames_lower for col_req in required_cols_lower):
                     logger.error(f"CSV文件 {file_path} 的基本列标题不正确。必须包含: ProductName, Specification, Price, Unit, Category (大小写不敏感)")
+                    logger.error(f"实际列名: {fieldnames_clean}")
                     return False
                 
-                for row_num, row in enumerate(reader, 1): 
+                for row_num, row in enumerate(reader, 1):
                     try:
-                        product_name = row['ProductName'].strip()
-                        specification = row['Specification'].strip()
-                        price_str = row['Price'].strip()
-                        unit = row['Unit'].strip()
-                        category = row['Category'].strip()
-                        # 读取可选列
-                        description = row.get('Description', row.get('description', '')).strip() if has_description else ""
-                        is_seasonal_str = row.get('IsSeasonal', row.get('isseasonal', '')).strip().lower()
-                        is_seasonal = is_seasonal_str in ['true', 'yes', '1', 'y'] if has_seasonal else False
-                        keywords_text = row.get('Keywords', row.get('keywords', '')).strip() if has_keywords else ""
-                        keywords = [k.lower() for k in re.split(r'[;,\s]+', keywords_text) if k.strip()]
-                        
+                        # 使用映射来访问列，处理列名中的空格问题
+                        product_name = row[column_mapping['ProductName']].strip()
+                        specification = row[column_mapping['Specification']].strip()
+                        price_str = row[column_mapping['Price']].strip()
+                        unit = row[column_mapping['Unit']].strip()
+                        category = row[column_mapping['Category']].strip()
+
+                        # 读取可选列，使用安全的方式
+                        description = ""
+                        if has_description:
+                            desc_key = column_mapping.get('Description')
+                            if desc_key and desc_key in row:
+                                description = row[desc_key].strip()
+
+                        is_seasonal = False
+                        if has_seasonal:
+                            seasonal_key = column_mapping.get('IsSeasonal')
+                            if seasonal_key and seasonal_key in row:
+                                is_seasonal_str = row[seasonal_key].strip().lower()
+                                is_seasonal = is_seasonal_str in ['true', 'yes', '1', 'y']
+
+                        keywords = []
+                        if has_keywords:
+                            keywords_key = column_mapping.get('Keywords')
+                            if keywords_key and keywords_key in row:
+                                keywords_text = row[keywords_key].strip()
+                                keywords = [k.lower() for k in re.split(r'[;,\s]+', keywords_text) if k.strip()]
+
                         # 新增: 读取多维度标签
-                        taste = row.get('Taste', row.get('taste', '')).strip() if has_taste else ""
-                        origin = row.get('Origin', row.get('origin', '')).strip() if has_origin else ""
-                        benefits = row.get('Benefits', row.get('benefits', '')).strip() if has_benefits else ""
-                        suitablefor = row.get('SuitableFor', row.get('suitablefor', '')).strip() if has_suitablefor else ""
+                        taste = ""
+                        if has_taste:
+                            taste_key = column_mapping.get('Taste')
+                            if taste_key and taste_key in row:
+                                taste = row[taste_key].strip()
+
+                        origin = ""
+                        if has_origin:
+                            origin_key = column_mapping.get('Origin')
+                            if origin_key and origin_key in row:
+                                origin = row[origin_key].strip()
+
+                        benefits = ""
+                        if has_benefits:
+                            benefits_key = column_mapping.get('Benefits')
+                            if benefits_key and benefits_key in row:
+                                benefits = row[benefits_key].strip()
+
+                        suitablefor = ""
+                        if has_suitablefor:
+                            suitablefor_key = column_mapping.get('SuitableFor')
+                            if suitablefor_key and suitablefor_key in row:
+                                suitablefor = row[suitablefor_key].strip()
 
                         if not product_name or not price_str or not specification or not unit or not category:
                             logger.warning(f"CSV文件第 {row_num+1} 行数据不完整，已跳过: {row}")

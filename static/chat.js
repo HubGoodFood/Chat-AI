@@ -196,7 +196,28 @@ function sendProductSuggestionChoice(payload, displayText, suggestionsContainer)
     sendMessage(`product_selection:${payload}`, displayText);
 }
 
+// 页面加载时清除缓存的函数
+function clearCacheOnPageLoad() {
+    fetch('/admin/clear-cache', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('缓存已清除:', data);
+    })
+    .catch(error => {
+        console.log('清除缓存失败:', error);
+        // 即使清除缓存失败也不影响页面正常使用
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function () {
+    // 页面加载时自动清除缓存
+    clearCacheOnPageLoad();
+
     const savedTheme = localStorage.getItem('theme');
     applyTheme(savedTheme);
 
