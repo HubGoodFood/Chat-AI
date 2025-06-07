@@ -20,8 +20,25 @@ from src.app.products.manager import ProductManager # Reverted to src.
 from src.app.chat.handler import ChatHandler # Reverted to src.
 from src.app.policy.manager import PolicyManager # Reverted to src.
 from src.core.performance_monitor import init_global_monitor, get_global_monitor, monitor_performance
+from src.core.static_optimizer import StaticOptimizer
+from src.core.cache_headers import cache_control
+from src.core.cdn import static_url, get_asset_info
 
-app = Flask(__name__, template_folder='../../templates', static_folder='../../static') # 修改
+app = Flask(__name__, template_folder='../../templates', static_folder='../../static') # 恢复默认静态文件处理
+
+# 初始化静态文件优化器
+static_optimizer = StaticOptimizer('static')
+
+# 注册模板函数
+@app.template_global()
+def static_url_optimized(filename):
+    """模板函数：获取优化的静态文件URL"""
+    return static_url(filename)
+
+@app.template_global()
+def asset_info(filename):
+    """模板函数：获取资源信息"""
+    return get_asset_info(filename)
 
 # --- 新增：配置日志 ---
 logging.basicConfig(level=logging.DEBUG, # 修改日志级别为 DEBUG
@@ -90,6 +107,12 @@ except Exception as e:
             logger.exception(f"使用基本配置初始化聊天处理器也失败: {basic_init_e}")
             logger.critical("无法初始化聊天处理器，应用将无法处理聊天。请检查配置。")
             chat_handler = None  # 明确设置为 None，后续使用前需要检查
+
+# 注释掉自定义静态文件路由，使用Flask默认处理
+# @app.route('/static/<path:filename>')
+# def optimized_static(filename):
+#     """优化的静态文件服务"""
+#     # 暂时禁用，使用Flask默认静态文件处理
 
 @app.route('/health')
 @monitor_performance(performance_monitor, endpoint='/health')

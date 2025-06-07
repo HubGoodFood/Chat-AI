@@ -1,0 +1,66 @@
+{
+  "version": "1.0.0",
+  "generated": "2025-06-07T02:47:03.561521",
+  "files": {
+    "chat.js": {
+      "versioned": "chat.9c321bd0.js",
+      "hash": "9c321bd0",
+      "size": 9615,
+      "modified": "2025-06-06T23:57:49.659923",
+      "type": "script"
+    },
+    "chat.min.js": {
+      "versioned": "chat.min.4c747766.js",
+      "hash": "4c747766",
+      "size": 6501,
+      "modified": "2025-06-07T02:47:03.348804",
+      "type": "script"
+    },
+    "chat.min.js.gz": {
+      "versioned": "chat.min.js.8869f69b.gz",
+      "hash": "8869f69b",
+      "size": 2017,
+      "modified": "2025-06-07T02:47:03.350308",
+      "type": "other"
+    },
+    "style.css": {
+      "versioned": "style.840a29e7.css",
+      "hash": "840a29e7",
+      "size": 10622,
+      "modified": "2025-06-05T03:28:17.769103",
+      "type": "stylesheet"
+    },
+    "style.min.css": {
+      "versioned": "style.min.b02de049.css",
+      "hash": "b02de049",
+      "size": 7128,
+      "modified": "2025-06-07T02:47:03.262073",
+      "type": "stylesheet"
+    },
+    "style.min.css.gz": {
+      "versioned": "style.min.css.d9501583.gz",
+      "hash": "d9501583",
+      "size": 1990,
+      "modified": "2025-06-07T02:47:03.263077",
+      "type": "other"
+    }
+  },
+  "stats": {
+    "total_files": 6,
+    "total_size": 37873,
+    "by_type": {
+      "script": {
+        "count": 2,
+        "size": 16116
+      },
+      "other": {
+        "count": 2,
+        "size": 4007
+      },
+      "stylesheet": {
+        "count": 2,
+        "size": 17750
+      }
+    }
+  }
+}
