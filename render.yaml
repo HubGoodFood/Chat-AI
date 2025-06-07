@@ -22,11 +22,7 @@ services:
       
       # 预训练轻量级模型（如果有训练数据）
       if [ -f "data/intent_training_data.csv" ]; then
-        python -c "
-from src.app.intent.lightweight_classifier import LightweightIntentClassifier
-classifier = LightweightIntentClassifier(lazy_load=False)
-print('轻量级意图分类器预训练完成')
-        "
+        python -c "from src.app.intent.lightweight_classifier import LightweightIntentClassifier; classifier = LightweightIntentClassifier(lazy_load=False); print('轻量级意图分类器预训练完成')"
       fi
       
     startCommand: |
@@ -52,6 +48,11 @@ print('轻量级意图分类器预训练完成')
       - key: CACHE_ENABLED
         value: true
       - key: LAZY_LOADING
+        value: true
+      # Redis配置 - 在Render环境中禁用Redis，使用内存缓存
+      - key: REDIS_ENABLED
+        value: false
+      - key: MONITORING_ENABLED
         value: true
       # API密钥从Render环境变量中获取
       - key: DEEPSEEK_API_KEY
