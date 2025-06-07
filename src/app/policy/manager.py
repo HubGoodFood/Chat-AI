@@ -197,6 +197,86 @@ class PolicyManager:
         keyword_result = self.find_policy_excerpt([query])
         return [keyword_result] if keyword_result else ["请联系客服了解具体政策信息。"]
 
+    def get_policy_categories(self) -> List[Dict[str, str]]:
+        """
+        获取政策类别列表，用于生成政策选择按钮
+
+        Returns:
+            List[Dict[str, str]]: 政策类别列表，每个包含display_text和payload
+        """
+        # 政策类别映射：section_key -> 用户友好的显示名称
+        category_mapping = {
+            'mission': '理念宗旨',
+            'group_rules': '群规制度',
+            'product_quality': '质量保证',
+            'delivery': '配送政策',
+            'payment': '付款方式',
+            'pickup': '取货信息',
+            'after_sale': '售后服务',
+            'community': '社区互助'
+        }
+
+        categories = []
+        if 'sections' in self.policy_data:
+            for section_key, display_name in category_mapping.items():
+                if section_key in self.policy_data['sections']:
+                    categories.append({
+                        'display_text': display_name,
+                        'payload': f'policy_category:{section_key}'
+                    })
+
+        return categories
+
+    def get_policy_by_category(self, category_key: str) -> str:
+        """
+        根据类别键获取具体政策内容
+
+        Args:
+            category_key (str): 政策类别键（如'delivery', 'payment'等）
+
+        Returns:
+            str: 格式化的政策内容
+        """
+        # 类别名称映射
+        category_names = {
+            'mission': '理念宗旨',
+            'group_rules': '群规制度',
+            'product_quality': '质量保证',
+            'delivery': '配送政策',
+            'payment': '付款方式',
+            'pickup': '取货信息',
+            'after_sale': '售后服务',
+            'community': '社区互助'
+        }
+
+        if 'sections' not in self.policy_data or category_key not in self.policy_data['sections']:
+            return f"抱歉，没有找到关于{category_names.get(category_key, category_key)}的政策信息。"
+
+        category_name = category_names.get(category_key, category_key)
+        policy_items = self.policy_data['sections'][category_key]
+
+        if not policy_items:
+            return f"抱歉，{category_name}的政策信息暂时为空。"
+
+        # 格式化政策内容
+        response_parts = [f"📋 {category_name}"]
+        response_parts.append("")  # 空行
+
+        for i, item in enumerate(policy_items, 1):
+            response_parts.append(f"• {item}")
+
+        # 添加版本信息
+        version = self.get_policy_version()
+        last_updated = self.get_policy_last_updated()
+        response_parts.append("")
+        response_parts.append(f"(政策版本: {version}, 最后更新: {last_updated})")
+
+        # 添加引导信息
+        response_parts.append("")
+        response_parts.append("如需了解其他政策信息，您可以询问\"你们有什么政策？\"查看完整政策列表。")
+
+        return "\n".join(response_parts)
+
     def find_policy_excerpt(self, keywords: List[str]) -> str:
         """
         (Legacy) Return the first matching line using keywords priority from original lines.

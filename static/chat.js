@@ -80,7 +80,9 @@ function sendMessage(messageToSend, messageToDisplay) {
     document.getElementById('sendBtn').disabled = true;
 
     // 发送内部消息到后端
-    fetch('/chat', {
+    const apiUrl = window.location.origin + '/chat';
+    console.log('发送请求到:', apiUrl);
+    fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: internalMessage, user_id: getUserId() })
@@ -133,8 +135,14 @@ function sendMessage(messageToSend, messageToDisplay) {
                     button.textContent = suggestion.display_text;
                     button.dataset.payload = suggestion.payload;
                     button.addEventListener('click', function() {
-                        // 传递 payload 和 display_text
-                        sendProductSuggestionChoice(suggestion.payload, suggestion.display_text, suggestionsContainer);
+                        // 检查是否是政策按钮
+                        if (suggestion.payload.startsWith('policy_category:')) {
+                            // 政策按钮：直接发送payload，不添加前缀
+                            sendPolicyChoice(suggestion.payload, suggestion.display_text, suggestionsContainer);
+                        } else {
+                            // 产品建议按钮：使用原有逻辑
+                            sendProductSuggestionChoice(suggestion.payload, suggestion.display_text, suggestionsContainer);
+                        }
                     });
                     suggestionsContainer.appendChild(button);
                 });
@@ -151,13 +159,13 @@ function sendMessage(messageToSend, messageToDisplay) {
             chatbox.scrollTop = chatbox.scrollHeight;
         })
         .catch(error => {
-            console.error('Error:', error);
+            console.error('连接错误详情:', error);
             if (typingIndicator.parentNode) {
                 chatbox.removeChild(typingIndicator);
             }
             const errorMsgElement = document.createElement('div');
             errorMsgElement.className = 'message ai-message';
-            errorMsgElement.innerHTML = '<p class="message-content">抱歉，发生了错误，请稍后再试。</p>' +
+            errorMsgElement.innerHTML = '<p class="message-content">❌ 连接失败: ' + error.message + '<br>请检查服务器是否正在运行。<br>服务器地址: ' + apiUrl + '</p>' +
                 '<div class="timestamp">今天 ' + getCurrentTimestamp() + '</div>';
             chatbox.appendChild(errorMsgElement);
             document.getElementById('sendBtn').disabled = false;
@@ -196,9 +204,24 @@ function sendProductSuggestionChoice(payload, displayText, suggestionsContainer)
     sendMessage(`product_selection:${payload}`, displayText);
 }
 
+function sendPolicyChoice(payload, displayText, suggestionsContainer) {
+    // 禁用所有政策按钮以防止重复点击
+    const buttons = suggestionsContainer.getElementsByClassName('product-suggestion-btn');
+    for (let btn of buttons) {
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        btn.style.cursor = 'default';
+    }
+
+    // 政策选择：直接发送payload，不添加前缀
+    // payload格式已经是 'policy_category:xxx'
+    sendMessage(payload, displayText);
+}
+
 // 页面加载时清除缓存的函数
 function clearCacheOnPageLoad() {
-    fetch('/admin/clear-cache', {
+    const clearCacheUrl = window.location.origin + '/admin/clear-cache';
+    fetch(clearCacheUrl, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'

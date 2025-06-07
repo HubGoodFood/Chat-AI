@@ -8,6 +8,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
 # import os # Already imported
 import re
 import csv
@@ -26,6 +27,9 @@ from src.core.cache_headers import cache_control
 from src.core.cdn import static_url, get_asset_info
 
 app = Flask(__name__, template_folder='../../templates', static_folder='../../static') # 恢复默认静态文件处理
+
+# 配置CORS - 允许跨域请求
+CORS(app, origins=['http://localhost:5000', 'http://127.0.0.1:5000', 'http://10.0.0.27:5000'])
 
 # 初始化静态文件优化器
 static_optimizer = StaticOptimizer('static')
@@ -67,6 +71,16 @@ performance_monitor = init_global_monitor(enable_detailed_monitoring=enable_moni
 enable_redis = os.environ.get('REDIS_ENABLED', 'true').lower() == 'true'
 redis_url = os.environ.get('REDIS_URL')
 cache_manager = CacheManager(enable_redis=enable_redis, redis_url=redis_url)
+
+# --- 初始化智能缓存系统 ---
+try:
+    from src.core.smart_cache import initialize_smart_cache
+    smart_cache = initialize_smart_cache(app, cache_manager)
+    logger.info("智能缓存系统初始化成功")
+except Exception as e:
+    logger.error(f"智能缓存系统初始化失败: {e}")
+    smart_cache = None
+
 product_manager = ProductManager(cache_manager=cache_manager)
 policy_manager = PolicyManager(lazy_load=True)  # 使用懒加载避免启动时超时
 
@@ -89,9 +103,18 @@ except Exception as e:
 
 # 初始化聊天处理器
 try:
-    chat_handler = ChatHandler(product_manager=product_manager,
-                             policy_manager=policy_manager,
-                             cache_manager=cache_manager)
+    # 传递智能缓存给聊天处理器
+    chat_handler_kwargs = {
+        'product_manager': product_manager,
+        'policy_manager': policy_manager,
+        'cache_manager': cache_manager
+    }
+
+    # 如果智能缓存可用，添加到参数中
+    if smart_cache:
+        chat_handler_kwargs['smart_cache'] = smart_cache
+
+    chat_handler = ChatHandler(**chat_handler_kwargs)
     logger.info("聊天处理器初始化成功")
 except Exception as e:
     logger.exception(f"初始化聊天处理器时发生异常: {e}")
@@ -137,10 +160,17 @@ def health_check():
 def clear_cache():
     """清除所有缓存"""
     try:
+        # 清除智能缓存
+        if hasattr(app, 'smart_cache') and app.smart_cache:
+            app.smart_cache.invalidate_cache_by_type('general')
+            app.smart_cache.invalidate_cache_by_type('product')
+            app.smart_cache.invalidate_cache_by_type('policy')
+
         # 清除Redis缓存
         if cache_manager.redis_cache:
             cache_manager.redis_cache.clear_prefix("llm")
             cache_manager.redis_cache.clear_prefix("chatai")
+            cache_manager.redis_cache.clear_prefix("smart")
 
         # 清除Redis内存缓存
         if hasattr(cache_manager.redis_cache, 'memory_cache'):
@@ -163,6 +193,28 @@ def clear_cache():
         })
     except Exception as e:
         logger.error(f"清除缓存失败: {e}")
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/admin/cache-stats', methods=['GET'])
+def cache_stats():
+    """获取缓存统计信息"""
+    try:
+        stats = {
+            "basic_cache": cache_manager.health_check(),
+            "timestamp": datetime.now().isoformat()
+        }
+
+        # 添加智能缓存统计
+        if hasattr(app, 'smart_cache') and app.smart_cache:
+            stats["smart_cache"] = app.smart_cache.get_cache_statistics()
+
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"获取缓存统计失败: {e}")
         return jsonify({
             "status": "error",
             "error": str(e),

@@ -82,36 +82,71 @@ class LightweightPolicyManager:
     def _build_keyword_index(self):
         """构建关键词索引，用于快速匹配"""
         self.keyword_index = {
-            'delivery': {
-                'keywords': ['配送', '送货', '运费', '截单', '送达', '快递', '物流'],
-                'sentences': []
-            },
-            'refund': {
-                'keywords': ['退款', '退货', '质量', 'credit', '退钱', '赔偿', '问题'],
-                'sentences': []
-            },
             'payment': {
-                'keywords': ['付款', '支付', 'venmo', '汇款', '转账', '收费', '费用'],
+                'keywords': ['付款', '支付', 'venmo', '汇款', '转账', '收费', '费用', '账号', 'sabrina'],
+                'priority_keywords': ['venmo', '账号', 'sabrina', '付款'],  # 高优先级关键词
                 'sentences': []
             },
             'pickup': {
-                'keywords': ['取货', '自取', '取货点', '地址', '位置', '自提'],
+                'keywords': ['取货', '自取', '取货点', '地址', '位置', '自提', 'malden', 'chinatown', '273', '25'],
+                'priority_keywords': ['取货点', '地址', 'malden', 'chinatown'],  # 高优先级关键词
+                'sentences': []
+            },
+            'delivery': {
+                'keywords': ['配送', '送货', '运费', '截单', '送达', '快递', '物流', '周三', '周五'],
+                'priority_keywords': ['配送', '送货', '运费'],
+                'sentences': []
+            },
+            'refund': {
+                'keywords': ['退款', '退货', 'credit', '退钱', '赔偿', '质量问题'],  # 移除单独的"问题"
+                'priority_keywords': ['退款', '退货', 'credit'],
+                'sentences': []
+            },
+            'after_sale': {
+                'keywords': ['质量问题', '24小时', '照片', '反馈', '核实', '更换'],
+                'priority_keywords': ['质量问题', '24小时', '照片'],
+                'sentences': []
+            },
+            'group_rules': {
+                'keywords': ['群规', '禁止', '违反', '移出', '广告', '连接'],
+                'priority_keywords': ['群规', '禁止'],
                 'sentences': []
             },
             'general': {
-                'keywords': ['政策', '条款', '规定', '须知', '问题', '说明'],
+                'keywords': ['政策', '条款', '规定', '须知', '说明', '理念', '宗旨'],  # 移除"问题"
+                'priority_keywords': ['政策', '条款'],
                 'sentences': []
             }
         }
-        
-        # 为每个类别匹配相关句子
+
+        # 使用权重评分的方式为每个类别匹配相关句子
         for sentence in self.policy_sentences:
             sentence_lower = sentence.lower()
+            best_category = None
+            best_score = 0
+
+            # 计算每个类别的匹配分数
             for category, info in self.keyword_index.items():
-                for keyword in info['keywords']:
+                score = 0
+
+                # 高优先级关键词权重为3
+                for keyword in info.get('priority_keywords', []):
                     if keyword in sentence_lower:
-                        info['sentences'].append(sentence)
-                        break  # 避免重复添加同一句子
+                        score += 3
+
+                # 普通关键词权重为1
+                for keyword in info['keywords']:
+                    if keyword in sentence_lower and keyword not in info.get('priority_keywords', []):
+                        score += 1
+
+                # 记录最高分的类别
+                if score > best_score:
+                    best_score = score
+                    best_category = category
+
+            # 将句子分配给得分最高的类别
+            if best_category and best_score > 0:
+                self.keyword_index[best_category]['sentences'].append(sentence)
 
     def _ensure_tfidf_loaded(self):
         """确保TF-IDF模型已加载（懒加载）"""
@@ -144,15 +179,40 @@ class LightweightPolicyManager:
     def search_policy_by_keywords(self, query: str, top_k: int = 3) -> List[str]:
         """基于关键词的政策搜索（最快，最准确）"""
         query_lower = query.lower()
-        matched_sentences = []
-        
-        # 直接关键词匹配
+
+        # 特殊查询处理
+        special_results = self._handle_special_queries(query_lower)
+        if special_results:
+            return special_results[:top_k]
+
+        # 计算每个类别的匹配分数
+        category_scores = {}
         for category, info in self.keyword_index.items():
-            for keyword in info['keywords']:
+            score = 0
+
+            # 高优先级关键词权重为3
+            for keyword in info.get('priority_keywords', []):
                 if keyword in query_lower:
-                    matched_sentences.extend(info['sentences'][:2])  # 每个类别最多2句
-                    break
-        
+                    score += 3
+
+            # 普通关键词权重为1
+            for keyword in info['keywords']:
+                if keyword in query_lower and keyword not in info.get('priority_keywords', []):
+                    score += 1
+
+            if score > 0:
+                category_scores[category] = score
+
+        # 按分数排序，优先返回高分类别的内容
+        sorted_categories = sorted(category_scores.items(), key=lambda x: x[1], reverse=True)
+
+        matched_sentences = []
+        for category, score in sorted_categories:
+            sentences = self.keyword_index[category]['sentences']
+            # 高分类别返回更多句子
+            num_sentences = 3 if score >= 3 else 2
+            matched_sentences.extend(sentences[:num_sentences])
+
         # 去重并限制数量
         unique_sentences = []
         seen = set()
@@ -162,11 +222,54 @@ class LightweightPolicyManager:
                 seen.add(sentence)
                 if len(unique_sentences) >= top_k:
                     break
-        
+
         if unique_sentences:
-            logger.debug(f"关键词匹配找到 {len(unique_sentences)} 条政策")
-        
+            logger.debug(f"关键词匹配找到 {len(unique_sentences)} 条政策，类别分数: {category_scores}")
+
         return unique_sentences
+
+    def _handle_special_queries(self, query_lower: str) -> List[str]:
+        """处理特殊查询，确保返回最相关的内容"""
+
+        # 付款相关查询 - 优先返回账号信息
+        payment_patterns = ['付款', '支付', 'venmo', '账号', '汇款', '转账']
+        if any(pattern in query_lower for pattern in payment_patterns):
+            payment_sentences = self.keyword_index.get('payment', {}).get('sentences', [])
+            # 优先返回包含账号信息的句子
+            priority_sentences = []
+            other_sentences = []
+
+            for sentence in payment_sentences:
+                if 'venmo' in sentence.lower() or '账号' in sentence.lower() or 'sabrina' in sentence.lower():
+                    priority_sentences.append(sentence)
+                else:
+                    other_sentences.append(sentence)
+
+            return priority_sentences + other_sentences
+
+        # 取货地点查询 - 优先返回地址信息
+        pickup_patterns = ['取货', '自取', '地址', '位置', '哪里', '在哪']
+        if any(pattern in query_lower for pattern in pickup_patterns):
+            pickup_sentences = self.keyword_index.get('pickup', {}).get('sentences', [])
+            # 优先返回包含具体地址的句子
+            priority_sentences = []
+            other_sentences = []
+
+            for sentence in pickup_sentences:
+                if any(addr in sentence.lower() for addr in ['malden', 'chinatown', '273', '25', 'salem', 'chauncy']):
+                    priority_sentences.append(sentence)
+                else:
+                    other_sentences.append(sentence)
+
+            return priority_sentences + other_sentences
+
+        # 质量问题查询 - 优先返回售后服务信息
+        quality_patterns = ['质量问题', '有问题', '坏了', '不新鲜']
+        if any(pattern in query_lower for pattern in quality_patterns):
+            after_sale_sentences = self.keyword_index.get('after_sale', {}).get('sentences', [])
+            return after_sale_sentences
+
+        return []
 
     def search_policy_by_tfidf(self, query: str, top_k: int = 3) -> List[str]:
         """基于TF-IDF的政策搜索（轻量级语义搜索）"""

@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>连接测试 - Chat AI</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+        .info {
+            background-color: #d1ecf1;
+            border-color: #bee5eb;
+            color: #0c5460;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #results {
+            margin-top: 20px;
+        }
+        .log {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 3px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 Chat AI 连接诊断工具</h1>
+        
+        <div class="test-section info">
+            <h3>📋 诊断步骤</h3>
+            <p>此工具将帮助您诊断和解决Chat AI的连接问题：</p>
+            <ol>
+                <li>检查服务器连接状态</li>
+                <li>测试API端点响应</li>
+                <li>验证前端JavaScript配置</li>
+                <li>测试政策查询功能</li>
+            </ol>
+        </div>
+
+        <div class="test-section">
+            <h3>🚀 开始诊断</h3>
+            <button onclick="runAllTests()">运行完整诊断</button>
+            <button onclick="testServerConnection()">测试服务器连接</button>
+            <button onclick="testChatAPI()">测试聊天API</button>
+            <button onclick="testPolicyAPI()">测试政策查询</button>
+            <button onclick="clearResults()">清除结果</button>
+        </div>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const resultsDiv = document.getElementById('results');
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logDiv = document.createElement('div');
+            logDiv.className = `log ${type}`;
+            logDiv.textContent = `[${timestamp}] ${message}`;
+            resultsDiv.appendChild(logDiv);
+            resultsDiv.scrollTop = resultsDiv.scrollHeight;
+        }
+
+        function clearResults() {
+            resultsDiv.innerHTML = '';
+        }
+
+        async function testServerConnection() {
+            log('🔍 测试服务器连接...', 'info');
+            
+            try {
+                const response = await fetch(window.location.origin + '/');
+                if (response.ok) {
+                    log('✅ 服务器连接成功', 'success');
+                    log(`服务器地址: ${window.location.origin}`, 'info');
+                    return true;
+                } else {
+                    log(`❌ 服务器响应错误: ${response.status}`, 'error');
+                    return false;
+                }
+            } catch (error) {
+                log(`❌ 服务器连接失败: ${error.message}`, 'error');
+                return false;
+            }
+        }
+
+        async function testChatAPI() {
+            log('🔍 测试聊天API...', 'info');
+            
+            try {
+                const apiUrl = window.location.origin + '/chat';
+                log(`API地址: ${apiUrl}`, 'info');
+                
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: '测试连接',
+                        user_id: 'test_user'
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    log('✅ 聊天API响应成功', 'success');
+                    log(`响应数据: ${JSON.stringify(data, null, 2)}`, 'info');
+                    return true;
+                } else {
+                    log(`❌ 聊天API响应错误: ${response.status}`, 'error');
+                    const errorText = await response.text();
+                    log(`错误详情: ${errorText}`, 'error');
+                    return false;
+                }
+            } catch (error) {
+                log(`❌ 聊天API请求失败: ${error.message}`, 'error');
+                return false;
+            }
+        }
+
+        async function testPolicyAPI() {
+            log('🔍 测试政策查询API...', 'info');
+            
+            try {
+                const apiUrl = window.location.origin + '/chat';
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: '你们有什么政策',
+                        user_id: 'test_user'
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    log('✅ 政策查询API响应成功', 'success');
+                    
+                    if (data.product_suggestions && data.product_suggestions.length > 0) {
+                        log(`✅ 政策分类按钮数量: ${data.product_suggestions.length}`, 'success');
+                        data.product_suggestions.forEach((suggestion, index) => {
+                            log(`  ${index + 1}. ${suggestion.display_text}`, 'info');
+                        });
+                    } else {
+                        log('⚠️ 未找到政策分类按钮', 'error');
+                    }
+                    return true;
+                } else {
+                    log(`❌ 政策查询API响应错误: ${response.status}`, 'error');
+                    return false;
+                }
+            } catch (error) {
+                log(`❌ 政策查询API请求失败: ${error.message}`, 'error');
+                return false;
+            }
+        }
+
+        async function runAllTests() {
+            log('🚀 开始完整诊断...', 'info');
+            log('='.repeat(50), 'info');
+            
+            const serverOk = await testServerConnection();
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            const chatOk = await testChatAPI();
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            const policyOk = await testPolicyAPI();
+            
+            log('='.repeat(50), 'info');
+            
+            if (serverOk && chatOk && policyOk) {
+                log('🎉 所有测试通过！Chat AI连接正常', 'success');
+                log('💡 如果前端仍有问题，请检查浏览器控制台错误', 'info');
+            } else {
+                log('❌ 部分测试失败，请检查服务器配置', 'error');
+                log('💡 建议：', 'info');
+                log('  1. 确认服务器正在运行 (python app.py)', 'info');
+                log('  2. 检查防火墙设置', 'info');
+                log('  3. 验证端口5000是否被占用', 'info');
+            }
+        }
+
+        // 页面加载时自动运行基础测试
+        window.addEventListener('load', () => {
+            log('📱 连接诊断工具已加载', 'info');
+            log(`当前页面地址: ${window.location.href}`, 'info');
+            log(`服务器地址: ${window.location.origin}`, 'info');
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>政策查询功能前端测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .chat-container {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
+            background: #fafafa;
+            min-height: 200px;
+            margin: 10px 0;
+        }
+        .message {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .user-message {
+            background: #007bff;
+            color: white;
+            text-align: right;
+        }
+        .bot-message {
+            background: #e9ecef;
+            color: #333;
+        }
+        .product-suggestions-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 10px 0;
+        }
+        .product-suggestion-btn {
+            padding: 8px 12px;
+            background-color: #e3f2fd;
+            color: #1976d2;
+            border: 1px solid #1976d2;
+            border-radius: 16px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            text-align: center;
+        }
+        .product-suggestion-btn:hover {
+            background-color: #1976d2;
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .product-suggestion-btn:disabled {
+            background-color: #e0e0e0;
+            color: #a0a0a0;
+            border-color: #c0c0c0;
+            cursor: default;
+            opacity: 0.7;
+            transform: translateY(0);
+        }
+        .test-button {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .test-button:hover {
+            background: #218838;
+        }
+        #testResult {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+    </style>
+</head>
+<body>
+    <h1>政策查询功能前端测试</h1>
+    
+    <div class="test-section">
+        <h2>测试1: 政策列表查询</h2>
+        <p>测试"你们有什么政策？"查询，应该返回政策类别按钮</p>
+        <button class="test-button" onclick="testPolicyListQuery()">测试政策列表查询</button>
+        <div id="policyListResult" class="chat-container"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>测试2: 政策类别选择</h2>
+        <p>测试点击政策类别按钮，应该显示具体政策内容</p>
+        <button class="test-button" onclick="testPolicyCategorySelection()">测试政策类别选择</button>
+        <div id="policyCategoryResult" class="chat-container"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>测试3: 静态按钮样式</h2>
+        <p>这些是静态的政策类别按钮，用于测试CSS样式：</p>
+        <div class="product-suggestions-container">
+            <button class="product-suggestion-btn">理念宗旨</button>
+            <button class="product-suggestion-btn">群规制度</button>
+            <button class="product-suggestion-btn">质量保证</button>
+            <button class="product-suggestion-btn">配送政策</button>
+            <button class="product-suggestion-btn">付款方式</button>
+            <button class="product-suggestion-btn">取货信息</button>
+            <button class="product-suggestion-btn">售后服务</button>
+            <button class="product-suggestion-btn">社区互助</button>
+            <button class="product-suggestion-btn" disabled>已禁用的按钮</button>
+        </div>
+    </div>
+    
+    <div id="testResult"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000';
+        
+        function addMessage(container, content, isUser = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
+            messageDiv.textContent = content;
+            container.appendChild(messageDiv);
+        }
+        
+        function addBotMessageWithButtons(container, message, suggestions) {
+            // 添加消息
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message bot-message';
+            messageDiv.textContent = message;
+            container.appendChild(messageDiv);
+            
+            // 添加按钮
+            if (suggestions && suggestions.length > 0) {
+                const suggestionsContainer = document.createElement('div');
+                suggestionsContainer.className = 'product-suggestions-container';
+                
+                suggestions.forEach(suggestion => {
+                    const button = document.createElement('button');
+                    button.className = 'product-suggestion-btn';
+                    button.textContent = suggestion.display_text;
+                    button.dataset.payload = suggestion.payload;
+                    button.addEventListener('click', function() {
+                        handlePolicyButtonClick(suggestion.payload, suggestion.display_text, suggestionsContainer);
+                    });
+                    suggestionsContainer.appendChild(button);
+                });
+                
+                container.appendChild(suggestionsContainer);
+            }
+        }
+        
+        function handlePolicyButtonClick(payload, displayText, suggestionsContainer) {
+            console.log('政策按钮被点击:', displayText, 'payload:', payload);
+            
+            // 禁用所有按钮
+            const buttons = suggestionsContainer.getElementsByClassName('product-suggestion-btn');
+            for (let btn of buttons) {
+                btn.disabled = true;
+                btn.style.opacity = '0.7';
+                btn.style.cursor = 'default';
+            }
+            
+            // 发送请求获取具体政策内容
+            testPolicyCategorySelection(payload);
+        }
+        
+        async function testPolicyListQuery() {
+            const container = document.getElementById('policyListResult');
+            container.innerHTML = '';
+            
+            addMessage(container, '你们有什么政策？', true);
+            
+            try {
+                const response = await fetch(`${API_BASE}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: '你们有什么政策？',
+                        user_id: 'test_user_frontend'
+                    })
+                });
+                
+                const data = await response.json();
+                console.log('政策列表查询响应:', data);
+                
+                if (data.message) {
+                    addBotMessageWithButtons(container, data.message, data.product_suggestions);
+                } else {
+                    addMessage(container, '服务器响应格式错误');
+                }
+                
+            } catch (error) {
+                console.error('请求失败:', error);
+                addMessage(container, '请求失败: ' + error.message);
+            }
+        }
+        
+        async function testPolicyCategorySelection(payload = 'policy_category:delivery') {
+            const container = document.getElementById('policyCategoryResult');
+            container.innerHTML = '';
+            
+            addMessage(container, '点击了配送政策按钮', true);
+            
+            try {
+                const response = await fetch(`${API_BASE}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: payload,
+                        user_id: 'test_user_frontend'
+                    })
+                });
+                
+                const data = await response.json();
+                console.log('政策类别选择响应:', data);
+                
+                if (data.message) {
+                    addMessage(container, data.message);
+                } else {
+                    addMessage(container, '服务器响应格式错误');
+                }
+                
+            } catch (error) {
+                console.error('请求失败:', error);
+                addMessage(container, '请求失败: ' + error.message);
+            }
+        }
+        
+        // 页面加载完成后的初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('testResult').innerHTML = `
+                <h3>测试说明</h3>
+                <p>1. 确保后端服务器在 localhost:5000 运行</p>
+                <p>2. 点击"测试政策列表查询"按钮测试政策列表功能</p>
+                <p>3. 点击"测试政策类别选择"按钮测试政策详情功能</p>
+                <p>4. 观察按钮样式和交互效果</p>
+            `;
+        });
+    </script>
+</body>
+</html>

@@ -22,16 +22,20 @@ class ChatHandler:
     
     def __init__(self, product_manager: ProductManager,
                  policy_manager: PolicyManager = None,
-                 cache_manager: CacheManager = None):
+                 cache_manager: CacheManager = None,
+                 smart_cache=None):
         """初始化聊天处理器
-        
+
         Args:
             product_manager (ProductManager): 产品管理器实例
+            policy_manager (PolicyManager, optional): 政策管理器实例
             cache_manager (CacheManager, optional): 缓存管理器实例
+            smart_cache (SmartCacheManager, optional): 智能缓存管理器实例
         """
         self.product_manager = product_manager
         self.policy_manager = policy_manager or PolicyManager(lazy_load=True)  # 使用懒加载
         self.cache_manager = cache_manager or CacheManager()
+        self.smart_cache = smart_cache  # 智能缓存管理器
         self.intent_classifier = LightweightIntentClassifier(lazy_load=True) # 使用轻量级分类器
         
         # 用户会话状态
@@ -361,18 +365,62 @@ class ChatHandler:
            any(noun in user_input_processed for noun in identity_nouns):
             return 'identity_query'
 
-        # 3. 检查是否是政策查询 (高优先级)
+        # 3. 检查是否是退货请求 (高优先级，在政策查询之前)
+        # 明确的退货请求模式，避免被误判为政策查询
+        refund_request_patterns = [
+            r'^(我要|我想|想要).*退货',
+            r'^退货$',
+            r'.*要退.*这个',
+            r'.*不要了.*退货',
+            r'.*有问题.*退货',
+            r'.*质量.*退货',
+            r'.*不满意.*退货',
+            # 新增：支持"我说要"句式和"退款"关键词
+            r'.*我说.*要.*退.*',
+            r'.*我说.*退.*',  # 支持"我说退货"、"我说退款"
+            r'.*退款.*',
+            r'.*要.*退款.*',
+            r'.*申请.*退.*',
+            r'.*需要.*退.*',
+            r'.*想.*退款.*',
+            r'.*要求.*退.*'
+        ]
+
+        for pattern in refund_request_patterns:
+            if re.search(pattern, user_input_processed):
+                return 'refund_request'
+
+        # 4. 检查是否是政策列表查询 (最高优先级)
+        # 先检查是否是询问政策列表，避免被误判为具体政策查询
+        policy_list_patterns = [
+            r'^政策[\?？!！。]*$',  # 单独的"政策"查询
+            r'(你们|平台)有什么政策',
+            r'政策有哪些',
+            r'有什么(规定|规则|制度)',
+            r'有哪些(政策|规定|规则|制度)',
+            r'^政策是什么$',  # 只匹配完整的"政策是什么"，不匹配"配送政策是什么"
+            r'规则有哪些',
+            r'都有什么(政策|规定)',
+            r'(政策|规定|规则).*列表',
+            r'所有(政策|规定|规则)',
+            r'全部(政策|规定|规则)'
+        ]
+
+        for pattern in policy_list_patterns:
+            if re.search(pattern, user_input_processed):
+                return 'inquiry_policy_list'
+
+        # 5. 检查是否是具体政策查询 (高优先级)
         # 添加明确的政策关键词检测，避免被误判为产品查询
         policy_keywords = [
             "政策", "规定", "条款", "须知", "规则", "群规",
             "配送", "送货", "运费", "截单", "配送时间", "配送费用",
             "付款", "支付", "venmo", "汇款", "付款方式", "支付方式",
             "取货", "自取", "取货点", "地址", "取货地址",
-            "退款", "退货", "质量", "credit", "售后", "质量问题",
             "理念", "宗旨", "社区", "互助", "拼台"
         ]
 
-        # 检查是否包含政策相关关键词
+        # 检查是否包含政策相关关键词（但排除已经被识别为退货请求的）
         if any(keyword in user_input_processed for keyword in policy_keywords):
             return 'inquiry_policy'
 
@@ -412,7 +460,24 @@ class ChatHandler:
         session = self.get_user_session(user_id)
         last_bot_mentioned_payload = session.get('last_bot_mentioned_product_payload')
 
-        # 1. 检查是否是来自前端按钮的直接产品选择
+        # 1. 检查是否是来自前端按钮的政策类别选择
+        if user_input.startswith("policy_category:"):
+            # 提取政策类别键
+            category_key = user_input.split(":", 1)[1].strip()
+            logger.info(f"处理来自按钮的政策类别选择: '{category_key}'")
+
+            if self.policy_manager:
+                try:
+                    # 获取具体政策内容
+                    policy_content = self.policy_manager.get_policy_by_category(category_key)
+                    return policy_content
+                except Exception as e:
+                    logger.error(f"获取政策类别 '{category_key}' 内容时出错: {e}")
+                    return "抱歉，获取政策信息时出现了问题。请稍后再试。"
+            else:
+                return "抱歉，政策管理器暂时不可用。"
+
+        # 2. 检查是否是来自前端按钮的直接产品选择
         if user_input.startswith("product_selection:"):
             # 规范化从前端收到的key：去除首尾空格并转为小写
             product_key = user_input.split(":", 1)[1].strip().lower()
@@ -457,6 +522,11 @@ class ChatHandler:
                 if keywords:
                     keywords_str = "、".join(keywords)
                     response_parts.append(f"它的特点可以概括为：{keywords_str}。")
+
+                # 添加质量保证和退货政策信息
+                quality_policy = self._get_quality_assurance_info()
+                if quality_policy:
+                    response_parts.append(f"\n{quality_policy}")
 
                 # 结束语
                 closing = random.choice([
@@ -523,8 +593,16 @@ class ChatHandler:
                         'description': product_details_for_payload.get('description')
                     }
 
+        elif intent == 'inquiry_policy_list':
+            # 处理政策列表查询，返回政策类别按钮
+            response_dict = self.handle_policy_list_query()
+            final_response = response_dict
+
         elif intent == 'inquiry_policy':
             final_response = self.handle_policy_question(user_input_processed)
+
+        elif intent == 'refund_request':
+            final_response = self.handle_refund_request(user_input_processed, user_input_original)
 
         # 将 price_or_buy 和新增加的 inquiry_availability 都指向 handle_price_or_buy
         # handle_price_or_buy 内部逻辑会处理找到和找不到产品的情况，这对于两种意图都适用
@@ -744,14 +822,14 @@ class ChatHandler:
 
     def handle_policy_question(self, user_input_processed: str) -> Optional[str]:
         """根据用户输入，使用语义搜索返回相关的政策语句。"""
-        if not self.policy_manager or not self.policy_manager.model:
-            logger.warning("PolicyManager or semantic model not available for policy question.")
+        if not self.policy_manager:
+            logger.warning("PolicyManager not available for policy question.")
             # Fallback to LLM if PolicyManager is not properly initialized
             return None # Let LLM handle it
         
         try:
-            # 使用语义搜索找到相关政策条款
-            relevant_sentences = self.policy_manager.find_policy_excerpt_semantic(user_input_processed)
+            # 使用统一的政策搜索入口（优先轻量级，回退到语义搜索）
+            relevant_sentences = self.policy_manager.search_policy(user_input_processed)
             
             if relevant_sentences:
                 # 将找到的句子格式化为回复
@@ -819,6 +897,189 @@ class ChatHandler:
         except Exception as e:
             logger.error(f"处理政策问题时出错: {e}")
             return "抱歉，处理您的政策问题时出现了技术问题。请稍后再试或换个方式提问。"
+
+    def handle_policy_list_query(self) -> Dict[str, Any]:
+        """
+        处理政策列表查询，返回政策类别按钮
+
+        Returns:
+            Dict[str, Any]: 包含 'message' 和 'product_suggestions' 的字典
+        """
+        if not self.policy_manager:
+            logger.warning("PolicyManager not available for policy list query.")
+            return {
+                "message": "抱歉，政策信息暂时无法获取。请稍后再试。",
+                "product_suggestions": []
+            }
+
+        try:
+            # 获取政策类别列表
+            policy_categories = self.policy_manager.get_policy_categories()
+
+            if not policy_categories:
+                return {
+                    "message": "抱歉，暂时没有可用的政策信息。",
+                    "product_suggestions": []
+                }
+
+            # 构建回复消息
+            message = "📋 我们的政策包括以下几个方面：\n\n您可以点击下面的按钮查看具体政策内容："
+
+            return {
+                "message": message,
+                "product_suggestions": policy_categories  # 复用product_suggestions机制
+            }
+
+        except Exception as e:
+            logger.error(f"处理政策列表查询时出错: {e}")
+            return {
+                "message": "抱歉，获取政策列表时出现了技术问题。请稍后再试。",
+                "product_suggestions": []
+            }
+
+    def handle_refund_request(self, user_input_processed: str, user_input_original: str) -> str:
+        """处理用户的退货请求，提供基于政策文件的结构化退货指导。
+
+        Args:
+            user_input_processed (str): 处理过的用户输入（小写）
+            user_input_original (str): 原始用户输入
+
+        Returns:
+            str: 退货处理指导回复
+        """
+        try:
+            if not self.policy_manager:
+                return self._get_fallback_refund_response()
+
+            # 获取退货相关的政策信息
+            product_quality_policies = self.policy_manager.get_policy_section('product_quality')
+            after_sale_policies = self.policy_manager.get_policy_section('after_sale')
+
+            if not product_quality_policies and not after_sale_policies:
+                return self._get_fallback_refund_response()
+
+            response_parts = []
+
+            # 1. 友好的开场白
+            response_parts.append("您好！很抱歉听到您想要退货。为了能更好地帮助您处理，可以请告诉我具体是哪件商品需要退货吗？这样我可以确认商品信息并为您提供后续的退货指引。")
+
+            # 2. 从政策文件中提取退货流程
+            response_parts.append("\n退货处理流程：")
+
+            # 提取24小时反馈要求
+            for sentence in after_sale_policies:
+                if "24小时内" in sentence and "反馈" in sentence:
+                    response_parts.append(f"- {sentence}")
+                    break
+
+            # 提取退款选项
+            for sentence in after_sale_policies:
+                if "退款可作为下次拼单的credit" in sentence:
+                    response_parts.append(f"- {sentence}")
+                    break
+
+            # 提取质量保证范围
+            for sentence in after_sale_policies:
+                if "质量保证范围不包括" in sentence:
+                    response_parts.append(f"- {sentence}")
+                    break
+
+            # 3. 从政策文件中提取不可退货的情况
+            response_parts.append("\n请注意以下情况无法提供退款：")
+            for sentence in product_quality_policies:
+                if "以下情况无法提供退款" in sentence:
+                    # 提取具体的不可退货情况
+                    conditions = sentence.split("：")[1] if "：" in sentence else sentence
+                    response_parts.append(f"- {conditions}")
+                    break
+
+            # 4. 引导用户提供具体信息
+            response_parts.append("\n为了更好地处理您的退货请求，请告诉我：")
+            response_parts.append("- 具体是什么产品需要退货？")
+            response_parts.append("- 遇到了什么问题？（如质量问题、商品损坏、品质不符等）")
+            response_parts.append("- 购买时间是什么时候？")
+
+            # 5. 承诺和联系方式
+            response_parts.append("\n我们会尽力帮您解决问题，让您购物更顺心。")
+
+            return "\n".join(response_parts)
+
+        except Exception as e:
+            logger.error(f"处理退货请求时出错: {e}")
+            return self._get_fallback_refund_response()
+
+    def _get_fallback_refund_response(self) -> str:
+        """获取备用的退货回复"""
+        return (
+            "您好！很抱歉听到您想要退货。\n\n"
+            "为了能更好地帮助您处理，可以请告诉我具体是哪件商品需要退货吗？\n"
+            "这样我可以确认商品信息并为您提供后续的退货指引。\n\n"
+            "一般来说，如果是商品质量问题，我们会在确认后为您处理退款或更换。\n"
+            "请您提供具体的商品信息和遇到的问题，我会尽力帮您解决。"
+        )
+
+    def _get_quality_assurance_info(self) -> Optional[str]:
+        """获取简洁的质量保证和退货政策信息，用于产品详情回复。
+
+        从 policy.json 文件动态读取官方政策内容，确保信息准确性和一致性。
+
+        Returns:
+            Optional[str]: 格式化的质量保证信息，如果获取失败则返回None
+        """
+        try:
+            if not self.policy_manager:
+                return None
+
+            # 获取质量保证相关的政策信息
+            quality_sentences = self.policy_manager.get_policy_section('product_quality')
+            after_sale_sentences = self.policy_manager.get_policy_section('after_sale')
+
+            if not quality_sentences and not after_sale_sentences:
+                return None
+
+            response_parts = []
+
+            # 从 product_quality 部分提取核心承诺
+            if quality_sentences:
+                for sentence in quality_sentences:
+                    if "我们承诺：不好不拼" in sentence:
+                        response_parts.append(f"质量保证：{sentence}")
+                        break
+
+                # 添加质量问题处理流程
+                for sentence in quality_sentences:
+                    if "如果收到的产品有质量问题" in sentence:
+                        response_parts.append(sentence)
+                        break
+
+                # 添加退款服务说明
+                for sentence in quality_sentences:
+                    if "质量问题经核实后" in sentence and "退款或更换" in sentence:
+                        response_parts.append(sentence)
+                        break
+
+            # 从 after_sale 部分补充重要信息
+            if after_sale_sentences:
+                # 添加反馈方式要求
+                for sentence in after_sale_sentences:
+                    if "通过照片私信反馈" in sentence:
+                        response_parts.append(sentence)
+                        break
+
+                # 添加退款选项说明
+                for sentence in after_sale_sentences:
+                    if "退款可作为下次拼单的credit" in sentence:
+                        response_parts.append(sentence)
+                        break
+
+            if response_parts:
+                return " ".join(response_parts)
+
+            return None
+
+        except Exception as e:
+            logger.error(f"获取质量保证信息时出错: {e}")
+            return None
 
     def _handle_price_or_buy_fallback_recommendation(self, user_input_original: str, user_input_processed: str, identified_query_product_name: Optional[str]) -> Optional[Union[str, Dict[str, Any]]]:
         """辅助函数：当handle_price_or_buy未找到精确产品时，生成相关的产品推荐。
@@ -1257,6 +1518,11 @@ class ChatHandler:
                             ]
                             response_parts.append(random.choice(description_phrases))
 
+                        # 添加质量保证和退货政策信息
+                        quality_policy = self._get_quality_assurance_info()
+                        if quality_policy:
+                            response_parts.append(f"\n{quality_policy}")
+
                         # 购买信息
                         if is_buy_action:
                             buy_phrases = [
@@ -1322,11 +1588,24 @@ class ChatHandler:
         final_response = ""
         extracted_product_payload = None
         
-        # 尝试从缓存获取LLM响应
-        cached_llm_response = self.cache_manager.get_llm_cached_response(user_input, context=session.get('last_product_key'))
-        if cached_llm_response:
-            logger.info(f"LLM fallback response retrieved from cache for: {user_input[:30]}...")
-            return cached_llm_response, None
+        # 尝试从智能缓存获取LLM响应
+        cached_llm_response = None
+        if self.smart_cache:
+            cached_llm_response = self.smart_cache.get_cached_response(
+                user_input,
+                context=session.get('last_product_key'),
+                query_type='chat'
+            )
+            if cached_llm_response:
+                logger.info(f"LLM fallback response retrieved from smart cache for: {user_input[:30]}...")
+                return cached_llm_response, None
+
+        # 回退到基础缓存
+        if not cached_llm_response:
+            cached_llm_response = self.cache_manager.get_llm_cached_response(user_input, context=session.get('last_product_key'))
+            if cached_llm_response:
+                logger.info(f"LLM fallback response retrieved from basic cache for: {user_input[:30]}...")
+                return cached_llm_response, None
 
         if not config.llm_client: # llm_client 现在从 config 模块获取
             logger.warning("LLM client is not available. Skipping LLM fallback.")
@@ -1469,8 +1748,17 @@ class ChatHandler:
             )
             if chat_completion.choices and chat_completion.choices[0].message and chat_completion.choices[0].message.content:
                 final_response = chat_completion.choices[0].message.content.strip()
-                # 缓存LLM响应
-                self.cache_manager.cache_llm_response(user_input, final_response, context=session.get('last_product_key'))
+                # 缓存LLM响应到智能缓存和基础缓存
+                if self.smart_cache:
+                    self.smart_cache.cache_response(
+                        user_input,
+                        final_response,
+                        context=session.get('last_product_key'),
+                        query_type='chat'
+                    )
+                else:
+                    # 回退到基础缓存
+                    self.cache_manager.cache_llm_response(user_input, final_response, context=session.get('last_product_key'))
             else:
                 final_response = "抱歉，AI助手暂时无法给出回复，请稍后再试。"
         except Exception as e:
