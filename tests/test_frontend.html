@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>前端测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .clarification-btn {
+            background-color: #e3f2fd;
+            color: #1976d2;
+            border: 1px solid #1976d2;
+            padding: 8px 12px;
+            border-radius: 16px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+            transition: all 0.2s ease;
+        }
+        .clarification-btn:hover {
+            background-color: #1976d2;
+            color: white;
+            transform: translateY(-1px);
+        }
+        .clarification-btn:disabled {
+            background-color: #e0e0e0;
+            color: #a0a0a0;
+            border-color: #c0c0c0;
+            cursor: default;
+            opacity: 0.7;
+        }
+        #testResult {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>前端功能测试</h1>
+    
+    <div class="test-section">
+        <h2>测试1: 静态按钮样式</h2>
+        <p>这些是静态的clarification按钮，用于测试CSS样式：</p>
+        <button class="clarification-btn">有机农场玉米</button>
+        <button class="clarification-btn">甜心玉米粒罐头</button>
+        <button class="clarification-btn" disabled>已禁用的按钮</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>测试2: 动态创建按钮</h2>
+        <p>点击下面的按钮来模拟API响应并创建clarification按钮：</p>
+        <button onclick="testDynamicButtons()">模拟API响应</button>
+        <div id="dynamicButtonsContainer"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>测试3: 实际API调用</h2>
+        <p>点击下面的按钮来测试实际的API调用：</p>
+        <button onclick="testRealAPI()">测试API调用 (玉米)</button>
+        <div id="apiResult"></div>
+    </div>
+    
+    <div id="testResult"></div>
+
+    <script>
+        function testDynamicButtons() {
+            console.log('测试动态按钮创建');
+            
+            // 模拟API响应数据
+            const mockData = {
+                message: "您好！我找到了几种玉米产品，请指定您想了解的：",
+                clarification_options: [
+                    {
+                        display_text: "有机农场玉米",
+                        payload: "有机农场玉米"
+                    },
+                    {
+                        display_text: "甜心玉米粒罐头",
+                        payload: "甜心玉米粒罐头"
+                    }
+                ]
+            };
+            
+            const container = document.getElementById('dynamicButtonsContainer');
+            container.innerHTML = ''; // 清空容器
+            
+            if (mockData.clarification_options && mockData.clarification_options.length > 0) {
+                console.log('创建clarification按钮，数量:', mockData.clarification_options.length);
+                
+                const optionsContainer = document.createElement('div');
+                optionsContainer.className = 'clarification-options-container';
+                
+                mockData.clarification_options.forEach(option => {
+                    console.log('创建按钮:', option.display_text, 'payload:', option.payload);
+                    const button = document.createElement('button');
+                    button.className = 'clarification-btn';
+                    button.textContent = option.display_text;
+                    button.dataset.payload = option.payload;
+                    button.addEventListener('click', function() {
+                        console.log('按钮被点击:', option.display_text);
+                        alert('按钮被点击: ' + option.display_text);
+                        
+                        // 禁用所有按钮
+                        const buttons = optionsContainer.getElementsByClassName('clarification-btn');
+                        for (let btn of buttons) {
+                            btn.disabled = true;
+                            btn.style.opacity = '0.7';
+                            btn.style.cursor = 'default';
+                        }
+                    });
+                    optionsContainer.appendChild(button);
+                });
+                
+                container.appendChild(optionsContainer);
+                console.log('按钮容器已添加到页面');
+                
+                document.getElementById('testResult').innerHTML = 
+                    '<strong>成功:</strong> 动态创建了 ' + mockData.clarification_options.length + ' 个按钮';
+            } else {
+                document.getElementById('testResult').innerHTML = 
+                    '<strong>错误:</strong> 没有clarification_options数据';
+            }
+        }
+        
+        function testRealAPI() {
+            console.log('测试实际API调用');
+            
+            fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: '玉米', user_id: 'test_user' })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('收到API响应:', data);
+                
+                const resultDiv = document.getElementById('apiResult');
+                resultDiv.innerHTML = '<h4>API响应:</h4><pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                
+                if (data.clarification_options && data.clarification_options.length > 0) {
+                    const optionsContainer = document.createElement('div');
+                    optionsContainer.innerHTML = '<h4>动态按钮:</h4>';
+                    
+                    data.clarification_options.forEach(option => {
+                        const button = document.createElement('button');
+                        button.className = 'clarification-btn';
+                        button.textContent = option.display_text;
+                        button.addEventListener('click', function() {
+                            alert('真实API按钮被点击: ' + option.display_text);
+                        });
+                        optionsContainer.appendChild(button);
+                    });
+                    
+                    resultDiv.appendChild(optionsContainer);
+                }
+            })
+            .catch(error => {
+                console.error('API调用错误:', error);
+                document.getElementById('apiResult').innerHTML = 
+                    '<strong>错误:</strong> ' + error.message;
+            });
+        }
+    </script>
+</body>
+</html>

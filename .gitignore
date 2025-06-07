@@ -26,13 +26,14 @@ cache/
 .env
 intent_model/
 
-# Test and debug files
-test_*.py
-debug_*.py
-comprehensive_*.py
-final_*.py
-simulate_*.py
-verify_*.py
-check_*.py
-demo_*.py
-test_frontend.html
+# Test and debug files (only in root directory)
+# Tests in tests/ folder are tracked
+/test_*.py
+/debug_*.py
+/comprehensive_*.py
+/final_*.py
+/simulate_*.py
+/verify_*.py
+/check_*.py
+/demo_*.py
+/test_frontend.html
