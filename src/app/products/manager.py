@@ -7,7 +7,7 @@ if PROJECT_ROOT not in sys.path:
 import re
 import csv
 import random
-from typing import Dict, List, Tuple # 新增导入，用于类型提示
+from typing import Dict, List, Tuple, Optional, Any # 新增导入，用于类型提示
 import logging
 import os
 from src.config import settings as config
@@ -23,19 +23,25 @@ class ProductManager:
     
     def __init__(self, cache_manager=None):
         """初始化产品管理器
-        
+
         Args:
             cache_manager (CacheManager, optional): 缓存管理器实例
         """
         # 产品数据存储
         self.product_catalog = {}
-        self.product_categories = {} 
+        self.product_categories = {}
         self.all_product_keywords = []
         self.seasonal_products = []
         self.popular_products = {}
-        
+
         # 缓存管理器
         self.cache_manager = cache_manager or CacheManager()
+
+        # 推荐引擎（延迟初始化）
+        self._recommendation_engine = None
+
+        # 自动加载产品数据
+        self.load_product_data()
     
     def load_product_data(self, file_path=config.PRODUCT_DATA_FILE):
         """从CSV文件加载产品数据
@@ -229,6 +235,62 @@ class ProductManager:
             for kw in details.get('keywords', []):
                 all_words.add(kw)
         return list(all_words)
+
+    @property
+    def recommendation_engine(self):
+        """获取推荐引擎实例（延迟初始化）"""
+        if self._recommendation_engine is None:
+            # 延迟导入以避免循环依赖
+            from .recommendation_engine import ProductRecommendationEngine
+            self._recommendation_engine = ProductRecommendationEngine(self)
+        return self._recommendation_engine
+
+    def get_smart_recommendations(self, query_product_name: str, target_category: Optional[str] = None, max_recommendations: int = 3):
+        """
+        获取智能产品推荐
+
+        Args:
+            query_product_name: 用户查询的产品名称
+            target_category: 目标类别（可选）
+            max_recommendations: 最大推荐数量
+
+        Returns:
+            推荐产品列表
+        """
+        return self.recommendation_engine.find_similar_products(
+            query_product_name, target_category, max_recommendations
+        )
+
+    def generate_unavailable_product_response(self, query_product_name: str, target_category: Optional[str] = None) -> Dict[str, Any]:
+        """
+        生成产品不可用的智能回复，包含消息和产品建议按钮
+
+        Args:
+            query_product_name: 用户查询的产品名称
+            target_category: 目标类别（可选）
+
+        Returns:
+            包含 'message' 和 'product_suggestions' 的字典
+        """
+        try:
+            recommendations = self.get_smart_recommendations(query_product_name, target_category)
+            response = self.recommendation_engine.generate_unavailable_response(
+                query_product_name, recommendations, target_category
+            )
+            logger.debug(f"成功生成产品不可用回复，产品: {query_product_name}, 类别: {target_category}, 推荐数量: {len(recommendations)}")
+            return response
+        except Exception as e:
+            logger.error(f"生成产品不可用回复时出错: {e}, 产品: {query_product_name}, 类别: {target_category}")
+            # 返回简单的备用回复
+            message = (
+                f"您想要的{query_product_name}确实是个不错的选择！\n"
+                f"很抱歉，我们目前暂时没有{query_product_name}。\n\n"
+                f"您可以告诉我您更偏好哪种类型的产品吗？这样我也许能帮您找到合适的替代品。"
+            )
+            return {
+                'message': message,
+                'product_suggestions': []
+            }
 
     def _get_pinyin_forms(self, text: str) -> Dict[str, str]:
         """为给定文本生成多种形式的拼音"""
@@ -526,13 +588,13 @@ class ProductManager:
         # 1. 检查水果和蔬菜特定关键词
         for keyword in config.FRUIT_KEYWORDS:
             if keyword in query_lower:
-                logger.debug(f"通过水果关键词识别到产品类别: 水果 (关键词: {keyword})")
-                return "水果"
+                logger.debug(f"通过水果关键词识别到产品类别: 时令水果 (关键词: {keyword})")
+                return "时令水果"
 
         for keyword in config.VEGETABLE_KEYWORDS:
             if keyword in query_lower:
-                logger.debug(f"通过蔬菜关键词识别到产品类别: 蔬菜 (关键词: {keyword})")
-                return "蔬菜"
+                logger.debug(f"通过蔬菜关键词识别到产品类别: 新鲜蔬菜 (关键词: {keyword})")
+                return "新鲜蔬菜"
 
         # 2. 直接在查询中查找类别名称
         for category_name in self.product_categories.keys():
@@ -570,11 +632,11 @@ class ProductManager:
 
         # 5. 基于通用词汇进行猜测
         if any(word in query_lower for word in ["吃", "食", "鲜", "甜", "新鲜", "水果", "果"]):
-            logger.debug(f"通过通用词汇猜测类别: 水果")
-            return "水果"
+            logger.debug(f"通过通用词汇猜测类别: 时令水果")
+            return "时令水果"
         if any(word in query_lower for word in ["菜", "素", "绿色", "蔬菜", "青菜"]):
-            logger.debug(f"通过通用词汇猜测类别: 蔬菜")
-            return "蔬菜"
+            logger.debug(f"通过通用词汇猜测类别: 新鲜蔬菜")
+            return "新鲜蔬菜"
 
         # 6. 分析查询中的字符，检查与类别名称的重叠
         query_chars = set(query_lower)

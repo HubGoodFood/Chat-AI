@@ -25,3 +25,14 @@ cache/
 # Application-specific
 .env
 intent_model/
+
+# Test and debug files
+test_*.py
+debug_*.py
+comprehensive_*.py
+final_*.py
+simulate_*.py
+verify_*.py
+check_*.py
+demo_*.py
+test_frontend.html

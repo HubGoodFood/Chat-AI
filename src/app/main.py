@@ -84,6 +84,16 @@ def index():
         logger.exception(f"渲染首页时发生异常: {e}")
         return "系统维护中，请稍后再试", 500
 
+@app.route('/test_frontend.html')
+def test_frontend():
+    """提供前端测试页面。"""
+    try:
+        with open('test_frontend.html', 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        logger.exception(f"提供测试页面时发生异常: {e}")
+        return "测试页面不可用", 500
+
 @app.route('/chat', methods=['POST'])
 def chat():
     """处理用户发送的聊天消息的API端点。"""
@@ -106,8 +116,12 @@ def chat():
         # 使用 ChatHandler 处理消息
         # ChatHandler 实例已经在全局创建: chat_handler
         final_response = chat_handler.handle_chat_message(user_input_original, user_id)
-        
+
         logger.info(f"最终回复给用户 {user_id}: {final_response}")
+        logger.info(f"回复类型: {type(final_response)}")
+        if isinstance(final_response, dict):
+            logger.info(f"字典键: {list(final_response.keys())}")
+            logger.info(f"clarification_options: {final_response.get('clarification_options', 'N/A')}")
         if isinstance(final_response, dict):
             # 如果 ChatHandler 返回的是字典，假定它已包含 'message' 键
             # 以及可能的 'clarification_options' 或 'product_suggestions'。

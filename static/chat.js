@@ -87,6 +87,9 @@ function sendMessage(messageToSend, messageToDisplay) {
     })
         .then(response => response.json())
         .then(data => {
+            console.log('收到API响应:', data);
+            console.log('clarification_options:', data.clarification_options);
+
             chatbox.removeChild(typingIndicator);
             const aiMsgElement = document.createElement('div');
             aiMsgElement.className = 'message ai-message';
@@ -100,20 +103,24 @@ function sendMessage(messageToSend, messageToDisplay) {
 
             // 将澄清选项的检查移到消息内容之后
             if (data.clarification_options && data.clarification_options.length > 0) {
+                console.log('创建clarification按钮，数量:', data.clarification_options.length);
                 const optionsContainer = document.createElement('div');
                 optionsContainer.className = 'clarification-options-container';
                 data.clarification_options.forEach(option => {
+                    console.log('创建按钮:', option.display_text, 'payload:', option.payload);
                     const button = document.createElement('button');
                     button.className = 'clarification-btn';
                     button.textContent = option.display_text;
                     button.dataset.payload = option.payload;
                     button.addEventListener('click', function() {
+                        console.log('按钮被点击:', option.display_text);
                         // 传递 payload 和 display_text
                         sendClarificationChoice(option.payload, option.display_text, optionsContainer);
                     });
                     optionsContainer.appendChild(button);
                 });
                 aiMsgElement.appendChild(optionsContainer);
+                console.log('按钮容器已添加到消息元素');
             }
 
             // 处理产品建议

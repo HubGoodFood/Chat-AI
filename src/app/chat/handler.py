@@ -197,7 +197,88 @@ class ChatHandler:
                 logger.debug(f"扩展后的查询 (通用追问): {user_input_processed}")
                 
         return user_input_processed, user_input_original
-        
+
+    def _extract_product_name_from_query(self, query: str) -> str:
+        """
+        从查询中提取产品名称，修复"卖不卖草莓"变成"不草莓"的bug
+
+        Args:
+            query: 用户查询文本
+
+        Returns:
+            str: 提取的产品名称或清洗后的查询
+        """
+        import re
+
+        if not query:
+            return ""
+
+        # 首先尝试直接匹配已知产品名称
+        if self.product_manager and self.product_manager.product_catalog:
+            for product_key, product_details in self.product_manager.product_catalog.items():
+                product_name = product_details.get('name', '')
+                original_name = product_details.get('original_display_name', '')
+
+                # 检查产品名称是否在查询中
+                for name in [product_name, original_name]:
+                    if name and name.lower() in query.lower():
+                        logger.debug(f"直接匹配到产品名称: '{name}' 在查询 '{query}' 中")
+                        return name
+
+                # 反向匹配：检查查询中的产品关键词是否在产品名称中
+                # 这对于"梨有？"匹配"雪花梨蜜梨"这种情况很有用
+                query_clean = query.replace('有？', '').replace('有?', '').replace('有吗', '').replace('卖吗', '').replace('卖不卖', '').replace('有没有', '').strip()
+                if query_clean and len(query_clean) >= 1:
+                    for name in [product_name, original_name]:
+                        if name and query_clean.lower() in name.lower():
+                            logger.debug(f"反向匹配到产品名称: 查询关键词 '{query_clean}' 在产品名称 '{name}' 中")
+                            # 返回用户查询中的关键词，而不是完整的产品名称
+                            # 这样更符合用户的期望，例如"梨有？"应该提取出"梨"而不是"雪花梨蜜梨"
+                            return query_clean
+
+        # 如果没有直接匹配，使用正则表达式清洗
+        cleaned_query = query
+
+        # 定义需要移除的模式（使用正则表达式，避免部分匹配问题）
+        patterns_to_remove = [
+            r'^卖不卖\s*',      # 开头的"卖不卖"
+            r'^有没有\s*',      # 开头的"有没有"
+            r'^有不有\s*',      # 开头的"有不有"（口语化）
+            r'^卖不\s*',        # 开头的"卖不"（口语化）
+            r'^有不\s*',        # 开头的"有不"（口语化）
+            r'^有\s*',          # 开头的"有"（但要小心不要移除产品名称中的"有"）
+            r'\s*卖不卖[\?？!！。]*$',   # 结尾的"卖不卖"
+            r'\s*有没有[\?？!！。]*$',   # 结尾的"有没有"
+            r'\s*有不有[\?？!！。]*$',   # 结尾的"有不有"
+            r'\s*卖不[\?？!！。]*$',     # 结尾的"卖不"
+            r'\s*有不[\?？!！。]*$',     # 结尾的"有不"
+            r'\s*卖吗[\?？!！。]*$',     # 结尾的"卖吗"
+            r'\s*有吗[\?？!！。]*$',     # 结尾的"有吗"
+            r'\s*有[\?？!！。]*$',       # 结尾的"有？"（新增：修复"草莓有？"问题）
+            r'\s*吗[\?？!！。]*$',       # 结尾的"吗"
+            r'\s*呢[\?？!！。]*$',       # 结尾的"呢"
+            r'\s*啊[\?？!！。]*$',       # 结尾的"啊"
+            r'\s*多少钱\s*',    # "多少钱"
+            r'\s*价格\s*',      # "价格"
+            r'^我要\s*',        # 开头的"我要"
+            r'^你们\s*',        # 开头的"你们"
+            r'\s*怎么卖\s*',    # "怎么卖"
+            r'\s*一斤多少\s*',  # "一斤多少"
+            r'\s*售价\s*',      # "售价"
+        ]
+
+        for pattern in patterns_to_remove:
+            cleaned_query = re.sub(pattern, '', cleaned_query, flags=re.IGNORECASE)
+
+        cleaned_query = cleaned_query.strip()
+
+        # 如果清洗后为空或太短，返回原始查询
+        if not cleaned_query or len(cleaned_query) < 2:
+            return query
+
+        logger.debug(f"查询清洗: '{query}' -> '{cleaned_query}'")
+        return cleaned_query
+
     def detect_intent(self, user_input_processed: str) -> str:
         """
         使用微调后的模型检测用户意图。
@@ -211,6 +292,18 @@ class ChatHandler:
         if user_input_processed in greeting_keywords:
             return 'greeting'
 
+        # 2. 检查是否是身份查询 (高优先级)
+        # 使用更灵活的规则来捕获各种身份查询，避免模型误判
+        identity_phrases = ["你是谁", "你叫什么", "你是什么", "介绍下自己"]
+        if any(phrase in user_input_processed for phrase in identity_phrases):
+            return 'identity_query'
+
+        identity_triggers = ["你是", "你是不是"]
+        identity_nouns = ["机器人", "ai", "chatgpt", "助手", "真人"]
+        if any(trigger in user_input_processed for trigger in identity_triggers) and \
+           any(noun in user_input_processed for noun in identity_nouns):
+            return 'identity_query'
+
         # --- 模型预测：如果不是明确的规则匹配，则使用模型 ---
         if self.intent_classifier and self.intent_classifier.model:
             predicted_intent = self.intent_classifier.predict(user_input_processed)
@@ -221,48 +314,7 @@ class ChatHandler:
         # --- 模型不可用或预测为 'unknown' 时的回退规则 ---
         logger.warning(f"模型无法预测意图或预测为unknown，回退到规则检测: '{user_input_processed}'")
 
-        # 2. 检查是否询问"卖什么"
-        if any(keyword in user_input_processed for keyword in config.WHAT_DO_YOU_SELL_KEYWORDS):
-            return 'what_do_you_sell'
-            
-        # 3. 检查是否是推荐请求
-        if any(keyword in user_input_processed for keyword in config.RECOMMEND_KEYWORDS):
-            return 'request_recommendation'
-            
-        # 4. 检查是否是政策相关问题
-        policy_keywords_flat = [kw for sublist in config.POLICY_KEYWORD_MAP.values() for kw in sublist]
-        if any(k in user_input_processed for k in policy_keywords_flat):
-            return 'inquiry_policy'
-
-        # 5. 检查是否是关于可用性的查询 ("有没有")
-        # 这里的关键词应该更精确，避免与购买意图冲突
-        availability_keywords = ["有没有", "有卖", "有这个吗"]
-        if any(keyword in user_input_processed for keyword in availability_keywords):
-             # 清洗查询以更好地匹配产品
-            query_for_matching = user_input_processed
-            all_stopwords = availability_keywords + ["你们", "我们", "我", "你", "的", "吗", "呢", "吧", "呀", "啊"]
-            for stopword in set(all_stopwords):
-                query_for_matching = query_for_matching.replace(stopword, '')
-            if query_for_matching.strip():
-                return 'inquiry_availability'
-
-        # 6. 检查是否是价格查询或购买意图 ("卖不卖", "多少钱")
-        # 这个应该在可用性查询之后，因为它是一个更强的意图
-        price_buy_keywords = config.PRICE_QUERY_KEYWORDS + config.BUY_INTENT_KEYWORDS + ["卖不卖"]
-        if any(keyword in user_input_processed for keyword in price_buy_keywords):
-            return 'inquiry_price_or_buy'
-
-        # 7. 如果包含产品名，但没有明确意图词，也倾向于是价格/购买意图
-        try:
-            query_for_matching = user_input_processed
-            all_stopwords = ["你们", "我们", "我", "你", "他", "她", "它", "的", "地", "得", "了", "着", "过", "吗", "呢", "吧", "呀", "啊", "什么", "是", "不是", "想", "要", "请问", "那个", "这个"]
-            for stopword in set(all_stopwords):
-                query_for_matching = query_for_matching.replace(stopword, '')
-            if query_for_matching.strip():
-                 return 'inquiry_price_or_buy'
-        except Exception:
-            pass
-
+        # 如果所有规则都未匹配，则返回 'unknown'，交由 LLM 兜底处理
         return 'unknown'
         
     def handle_chat_message(self, user_input: str, user_id: str) -> Union[str, Dict, None]:
@@ -641,7 +693,7 @@ class ChatHandler:
             # 如果发生异常，返回一个友好的错误提示
             return "抱歉，在查询政策信息时遇到了一点技术问题，我们正在尽快修复！"
 
-    def _handle_price_or_buy_fallback_recommendation(self, user_input_original: str, user_input_processed: str, identified_query_product_name: Optional[str]) -> Optional[str]:
+    def _handle_price_or_buy_fallback_recommendation(self, user_input_original: str, user_input_processed: str, identified_query_product_name: Optional[str]) -> Optional[Union[str, Dict[str, Any]]]:
         """辅助函数：当handle_price_or_buy未找到精确产品时，生成相关的产品推荐。
 
         Args:
@@ -650,23 +702,57 @@ class ChatHandler:
             identified_query_product_name (str or None): 从用户输入中初步识别出的产品名关键词。
 
         Returns:
-            str or None: 如果能生成推荐，则返回推荐字符串，否则返回None。
+            Union[str, Dict[str, Any]] or None: 如果能生成推荐，则返回推荐字符串或包含product_suggestions的字典，否则返回None。
         """
+        # 使用新的智能推荐引擎
+        query_product_name = identified_query_product_name or user_input_original
+
+        # 尝试推断相关类别
+        related_category = self.product_manager.find_related_category(user_input_processed)
+
+        # 生成智能回复
+        try:
+            response = self.product_manager.generate_unavailable_product_response(
+                query_product_name, related_category
+            )
+            if response:  # 确保有有效回复
+                return response  # 现在返回字典格式 {message, product_suggestions}
+        except Exception as e:
+            logger.error(f"智能推荐引擎出错: {e}")
+            # 继续执行备用逻辑
+
+        # --- 原有逻辑作为备用 ---
+        query_desc_keyword = identified_query_product_name
+
+        # 如果上游没有成功提取出关键词，或者提取出的就是整个句子，我们在这里尝试一次更保守的清洗
+        if not query_desc_keyword or query_desc_keyword == user_input_processed:
+            temp_cleaned_query = user_input_processed
+            # 只移除最明确的查询意图词，保留可能是名词的部分
+            fallback_stopwords = config.GENERAL_QUERY_KEYWORDS + config.PRICE_QUERY_KEYWORDS + ["你们", "我们", "的", "吗", "呢", "呀", "啊"]
+            for word in fallback_stopwords:
+                temp_cleaned_query = temp_cleaned_query.replace(word, "")
+
+            temp_cleaned_query = temp_cleaned_query.strip()
+
+            # 如果清洗后有意义（不为空且长度大于1），就用它
+            if temp_cleaned_query and len(temp_cleaned_query) > 1:
+                query_desc_keyword = temp_cleaned_query
+        # --- 修改结束 ---
+
         recommendation_items = []
-        related_category = self.product_manager.find_related_category(user_input_original) 
-        logger.info(f"Fallback Recommendation: Related category: {related_category}, Query product keyword: {identified_query_product_name}")
+        logger.info(f"Fallback Recommendation (Legacy): Related category: {related_category}, Query product keyword: {query_desc_keyword}")
 
         # 1. 如果有识别出的产品词或类别，优先推荐相关
-        if identified_query_product_name or related_category:
+        if query_desc_keyword or related_category:
             temp_recs = []
             # 基于产品名关键词推荐
-            if identified_query_product_name:
+            if query_desc_keyword:
                 for key, details in self.product_manager.product_catalog.items():
-                    if identified_query_product_name.lower() in details['name'].lower() or identified_query_product_name.lower() in key.lower():
+                    if query_desc_keyword.lower() in details['name'].lower() or query_desc_keyword.lower() in key.lower():
                         if len(temp_recs) < 2: # 最多2个直接相关
-                            temp_recs.append((key, details, f"与'{identified_query_product_name}'相关"))
+                            temp_recs.append((key, details, f"与'{query_desc_keyword}'相关"))
                         else:
-                            break 
+                            break
             # 基于类别推荐
             if related_category and len(temp_recs) < 3:
                 cat_prods = self.product_manager.get_products_by_category(related_category, 3 - len(temp_recs))
@@ -696,65 +782,82 @@ class ChatHandler:
                     if len(recommendation_items) >= MAX_RECOMMENDATIONS: break
 
         if recommendation_items:
-            query_desc = f"'{identified_query_product_name if identified_query_product_name else user_input_original}'" \
-                         if (identified_query_product_name or user_input_original) else "您查询的产品"
+            # 在生成回复时，也使用新的关键词
+            query_desc = f"'{query_desc_keyword if query_desc_keyword else user_input_original}'"
             
             recommendations_text_list = []
             for key, details, tag in recommendation_items[:MAX_RECOMMENDATIONS]: # 确保不超过最大推荐数
                 recommendations_text_list.append(f"- {self.product_manager.format_product_display(details, tag=tag)}")
             recommendations_list_str = "\n".join(recommendations_text_list)
 
-            # --- 新增：人性化回复模板 ---
-            opening_phrases = [
-                f"哎呀，真不好意思，您提到的'{query_desc}'我们店里暂时还没有呢。",
-                f"您好！您提到的'{query_desc}'我们暂时没有完全一样的呢。",
-                f"关于'{query_desc}'，目前正好缺货，非常抱歉！"
-            ]
-            
-            recommendation_intros = [
-                "不过，这里有几款相似或店里很受欢迎的产品，您可以看看喜不喜欢：",
-                "不过别担心，我们有一些很棒的替代品，也许您会感兴趣：",
-                "为您推荐几款我们这里的优选好物，都很不错哦："
-            ]
+            # 使用统一的推荐引擎格式
+            # 尝试使用新的推荐引擎生成回复
+            try:
+                # 构建推荐对象列表
+                recommendations = []
+                for key, details, tag in recommendation_items[:3]:
+                    from src.app.products.recommendation_engine import ProductRecommendation
+                    recommendations.append(ProductRecommendation(
+                        product_key=key,
+                        product_details=details,
+                        similarity_score=0.7,  # 默认相似度
+                        recommendation_reason=tag,
+                        category_group=details.get('category', '其他')
+                    ))
 
-            closing_phrases = [
-                "这些里面有您中意的吗？或者，如果您能告诉我您更偏好哪种口味、品类或者有什么特定需求，我非常乐意再帮您精心挑选一下！",
-                "看看这些有没有您喜欢的？如果没有，随时告诉我您的偏好，我再帮您找找看！",
-                "您对这些推荐感兴趣吗？或者想了解其他什么类型的产品呢？"
-            ]
+                # 使用推荐引擎生成统一格式的回复
+                if hasattr(self.product_manager, 'recommendation_engine'):
+                    response_dict = self.product_manager.recommendation_engine.generate_unavailable_response(
+                        query_desc_keyword if query_desc_keyword else user_input_original,
+                        recommendations,
+                        related_category
+                    )
+                    return response_dict  # 现在返回字典格式 {message, product_suggestions}
+            except Exception as e:
+                logger.error(f"使用推荐引擎生成回复时出错: {e}")
+                # 回退到简化的统一格式
+                pass
 
+            # 备用的统一格式回复
+            product_name = query_desc_keyword if query_desc_keyword else user_input_original
+            category_type = "产品"
+            if related_category:
+                category_mapping = {
+                    "时令水果": "水果", "新鲜蔬菜": "蔬菜", "禽类产品": "禽类",
+                    "海鲜河鲜": "海鲜", "美味熟食/面点": "熟食", "蛋类": "蛋类"
+                }
+                category_type = category_mapping.get(related_category, related_category)
+
+            # 备用的统一格式回复 - 返回字符串格式以保持兼容性
             response_str = (
-                f"{random.choice(opening_phrases)}\n"
-                f"{random.choice(recommendation_intros)}\n\n"
+                f"{product_name}确实是很受欢迎的{category_type}呢！\n"
+                f"不过很抱歉，我们目前暂时没有{product_name}。\n\n"
+                f"不过，如果您喜欢{category_type}，我们有这些很棒的选择：\n\n"
                 f"{recommendations_list_str}\n\n"
-                f"{random.choice(closing_phrases)}"
+                f"这些里面有您感兴趣的吗？或者您还有其他偏好，我可以再帮您找找看！"
             )
             return response_str
         else:
-            # 如果没有任何推荐，返回引导性提示
-            # 动态获取一些品类作为示例
-            category_examples = []
-            if self.product_manager and self.product_manager.product_categories:
-                all_categories = list(self.product_manager.product_categories.keys())
-                if len(all_categories) > 0:
-                    random.shuffle(all_categories) # 随机打乱
-                    # 取前3个或所有（如果不足3个）
-                    example_count = min(3, len(all_categories))
-                    category_examples = [f"【{cat}】" for cat in all_categories[:example_count]]
-            
-            if category_examples:
-                examples_str = "、".join(category_examples)
-                return (
-                    f"哎呀，真不好意思，您提到的'{user_input_original}'我们店里暂时还没有呢。要不您看看我们其他的分类？"
-                    f"比如我们有新鲜的{examples_str}都很受欢迎。"
-                    f"您对哪个品类感兴趣，或者想找点什么特定口味的吗？告诉我您的想法，我来帮您参谋参谋！"
-                )
-            else: # 如果连品类都没有，给出更通用的提示
-                return (
-                    f"哎呀，真不好意思，您提到的'{user_input_original}'我们店里暂时还没有呢。"
-                    f"您可以告诉我您想找的是哪一类产品吗？比如是水果、蔬菜，还是其他特定的东西？"
-                    f"或者您对产品的口味、产地有什么偏好吗？这样我也许能帮您找到合适的替代品。"
-                )
+            # 如果没有任何推荐，使用推荐引擎的无推荐回复
+            try:
+                if hasattr(self.product_manager, 'recommendation_engine'):
+                    product_name = query_desc_keyword if query_desc_keyword else user_input_original
+                    response = self.product_manager.recommendation_engine._generate_no_recommendations_response(product_name)
+                    return response  # 现在返回字典格式 {message, product_suggestions}
+            except Exception as e:
+                logger.error(f"生成无推荐回复时出错: {e}")
+
+            # 备用的统一格式回复
+            final_query_desc = query_desc_keyword if query_desc_keyword else user_input_original
+            return {
+                'message': (
+                    f"您想要的{final_query_desc}确实是个不错的选择！\n"
+                    f"很抱歉，我们目前暂时没有{final_query_desc}。\n\n"
+                    f"不过，您可以告诉我您更偏好哪种类型的产品吗？比如是水果、蔬菜，还是其他特定的东西？"
+                    f"这样我也许能帮您找到合适的替代品。"
+                ),
+                'product_suggestions': []
+            }
 
     def handle_price_or_buy(self,
                             user_input_processed: str,
@@ -807,41 +910,42 @@ class ChatHandler:
             is_buy_action = any(keyword in user_input_processed for keyword in config.BUY_INTENT_KEYWORDS)
             is_price_action = any(keyword in user_input_processed for keyword in config.PRICE_QUERY_KEYWORDS)
 
-            # --- 核心修改：在模糊匹配前清洗查询语句 ---
-            query_for_matching = user_input_processed
-            # 从config中获取所有需要剔除的词
-            all_stopwords = (config.PRICE_QUERY_KEYWORDS +
-                             config.BUY_INTENT_KEYWORDS +
-                             config.GENERAL_QUERY_KEYWORDS +
-                             config.POLICY_KEYWORD_MAP.get('return_policy', []) + # 排除政策性词语
-                             config.POLICY_KEYWORD_MAP.get('shipping_policy', []) +
-                             ["你们", "我们", "我", "你", "他", "她", "它", "的", "地", "得", "了", "着", "过", "吗", "呢", "吧", "呀", "啊", "什么", "是", "不是", "想", "要", "请问", "那个", "这个"])
-            
-            for stopword in set(all_stopwords):
-                query_for_matching = query_for_matching.replace(stopword, '')
-            query_for_matching = query_for_matching.strip()
-            
-            # 如果清洗后查询为空（例如，用户只说了"多少钱"），则使用原始输入进行后续处理
+            # --- 核心修改：改进的查询清洗逻辑，修复"卖不卖草莓"变成"不草莓"的bug ---
+            query_for_matching = self._extract_product_name_from_query(user_input_processed)
+
+            # 如果提取失败，使用原始输入进行后续处理
             if not query_for_matching:
                 query_for_matching = user_input_processed
-            
-            logger.debug(f"清洗后的查询，用于模糊匹配: '{query_for_matching}'")
+
+            logger.debug(f"清洗后的查询，用于模糊匹配: '{query_for_matching}' (原始: '{user_input_processed}')")
             # --- 修改结束 ---
 
             possible_matches = self.product_manager.fuzzy_match_product(query_for_matching) # 使用清洗后的查询
             acceptable_matches = [(key, score) for key, score in possible_matches if score >= config.MIN_ACCEPTABLE_MATCH_SCORE]
 
             if not acceptable_matches:
-                query_product_name_keyword = None
-                user_words = set(re.findall(r'[\w\u4e00-\u9fff]+', user_input_original.lower()))
-                best_match_len = 0
-                for word in user_words:
-                    if len(word) < config.MIN_SUBSTRING_MATCH_LENGTH: continue
-                    for key, details in self.product_manager.product_catalog.items():
-                        if word in details['name'].lower() and len(word) > best_match_len:
-                            query_product_name_keyword = details['name']
-                            best_match_len = len(word)
-                final_response = self._handle_price_or_buy_fallback_recommendation(user_input_original, user_input_processed, query_product_name_keyword)
+                # 如果模糊匹配没有找到任何可接受的结果，
+                # 我们将清理后的查询词 'query_for_matching' 作为最可能的产品关键词。
+                # 这个词（例如从“有没有草莓”中提取的“草莓”）比原始的、未处理的输入更适合用于生成“未找到”的提示信息。
+                query_product_name_keyword = query_for_matching
+                
+                # 使用统一的推荐引擎处理产品不可用场景
+                try:
+                    related_category = self.product_manager.find_related_category(user_input_processed)
+                    final_response = self.product_manager.generate_unavailable_product_response(
+                        query_product_name_keyword, related_category
+                    )
+                except Exception as e:
+                    logger.error(f"推荐引擎处理失败: {e}")
+                    # 备用简单回复
+                    final_response = {
+                        'message': (
+                            f"您想要的{query_product_name_keyword}确实是个不错的选择！\n"
+                            f"很抱歉，我们目前暂时没有{query_product_name_keyword}。\n\n"
+                            f"您可以告诉我您更偏好哪种类型的产品吗？这样我也许能帮您找到合适的替代品。"
+                        ),
+                        'product_suggestions': []
+                    }
                 new_general_context_key = None # Fallback recommendation clears general product context
                 new_bot_mention_payload_for_next_turn = None # Fallback rec usually doesn't set a single product context
                 intent_handled = True
@@ -1099,11 +1203,11 @@ class ChatHandler:
                 "10. 如果上文提到过某个产品 (session['last_product_details']), 而当前用户问题不清晰，可以优先考虑与该产品相关。"
                 "11. (新增) 如果顾客的问题不是很明确（例如只说'随便看看'或者'有什么好的'），请主动提问来澄清他们的需求，比如询问他们偏好的品类（水果、蔬菜等）、口味（甜的、酸的）、或者用途（自己吃、送礼等）。"
                 "12. (新增) 当顾客遇到问题或者对某些信息不满意时，请表现出同理心，并积极尝试帮助他们解决问题或找到替代方案。在对话中，可以适当运用一些亲和的语气词，但避免过度使用表情符号。"
-                "13. (重要) 当告知用户某商品缺货时，你必须严格遵循以下三步结构来回复，不要添加任何额外的前言或总结：\n"
-                "    a. **共情与确认**: 首先，用一句话对用户想找的商品表示理解。例如：'蓝莓确实是很受欢迎的水果呢！'\n"
-                "    b. **明确告知缺货**: 接着，用一句话直接了当地告知我们暂时没有该商品。例如：'不过很抱歉，我们目前暂时没有蓝莓哦。'\n"
-                "    c. **提供替代品**: 最后，从我提供的产品列表中，选择1到2个最相关的产品作为替代品进行推荐，并简单说明推荐理由。例如：'不过，如果您喜欢新鲜的水果，我们有**新鲜山楂**，酸甜可口，很适合直接吃或者做成果酱呢！'\n"
-                "    请严格按照这个 'a-b-c' 的结构来组织你的回复，确保内容简洁、友好且切中要点。"
+                "13. (重要) 当告知用户某商品缺货时，你必须严格遵循以下统一的三步结构来回复，确保温暖、人性化的中文表达：\n"
+                "    a. **共情与确认**: 首先，用一句话对用户想找的商品表示理解和认可。例如：'草莓确实是很受欢迎的水果呢！'或'您想要的鸡肉，眼光真好！'\n"
+                "    b. **明确告知缺货**: 接着，用温暖、抱歉的语气告知我们暂时没有该商品。例如：'不过很抱歉，我们目前暂时没有草莓。'或'可惜的是，这款产品现在正好缺货呢。'\n"
+                "    c. **智能推荐替代品**: 最后，从我提供的产品列表中，选择2-3个最相关的同类产品作为替代品，并说明推荐理由。格式为：'不过，如果您喜欢[类别]，我们有这些很棒的选择：\\n\\n• [产品1] - [特色描述]\\n• [产品2] - [特色描述]\\n\\n这些里面有您感兴趣的吗？或者您还有其他偏好，我可以再帮您找找看！'\n"
+                "    请确保：1) 不要重复相同的内容；2) 推荐的产品来自同一类别；3) 突出产品特色；4) 语气温暖自然。"
             )
             messages = [{"role": "system", "content": system_prompt}]
             
