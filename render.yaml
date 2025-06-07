@@ -3,7 +3,7 @@ services:
     name: chat-ai
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    startCommand: gunicorn app:app -c gunicorn.conf.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
@@ -11,6 +11,12 @@ services:
         value: production
       - key: FLASK_DEBUG
         value: false
+      - key: TOKENIZERS_PARALLELISM
+        value: false
+      - key: TRANSFORMERS_OFFLINE
+        value: "1"
+      - key: HF_HUB_DISABLE_TELEMETRY
+        value: "1"
       - key: PORT
         fromService:
           type: web

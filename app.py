@@ -8,9 +8,18 @@ WSGI入口点文件
 import sys
 import os
 import logging
+import time
+
+# 设置环境变量以优化模型加载
+os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')
+os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
 
 # 配置基本日志
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # 确保项目根目录在Python路径中
@@ -19,25 +28,48 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
     logger.info(f"已添加项目根目录到Python路径: {PROJECT_ROOT}")
 
-try:
-    # 导入Flask应用实例
-    logger.info("正在导入Flask应用...")
-    from src.app.main import app
-    logger.info("Flask应用导入成功")
+def create_fallback_app():
+    """创建后备应用"""
+    from flask import Flask, jsonify
+    fallback_app = Flask(__name__)
 
-    # 为gunicorn提供应用实例
+    @fallback_app.route('/')
+    def health_check():
+        return jsonify({
+            "status": "starting",
+            "message": "应用正在启动中，请稍后再试..."
+        }), 503
+
+    @fallback_app.route('/health')
+    def health():
+        return jsonify({"status": "ok"}), 200
+
+    return fallback_app
+
+def load_main_app():
+    """加载主应用，带超时处理"""
+    logger.info("正在导入Flask应用...")
+    start_time = time.time()
+
+    try:
+        from src.app.main import app
+        load_time = time.time() - start_time
+        logger.info(f"Flask应用导入成功，耗时: {load_time:.2f}秒")
+        return app
+    except Exception as e:
+        load_time = time.time() - start_time
+        logger.error(f"导入Flask应用失败 (耗时: {load_time:.2f}秒): {e}")
+        raise
+
+# 尝试加载主应用
+try:
+    app = load_main_app()
     application = app
+    logger.info("✅ 主应用加载成功")
 
 except Exception as e:
-    logger.error(f"导入Flask应用失败: {e}")
-    # 创建一个最基本的Flask应用作为后备
-    from flask import Flask
-    app = Flask(__name__)
-
-    @app.route('/')
-    def health_check():
-        return "应用启动中，请稍后再试...", 503
-
+    logger.error(f"❌ 主应用加载失败，使用后备应用: {e}")
+    app = create_fallback_app()
     application = app
 
 if __name__ == '__main__':

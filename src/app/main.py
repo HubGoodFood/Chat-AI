@@ -34,7 +34,7 @@ logger.info(" Flask app object created. ") # 修改
 # --- 初始化管理器 ---
 cache_manager = CacheManager()
 product_manager = ProductManager(cache_manager=cache_manager)
-policy_manager = PolicyManager()
+policy_manager = PolicyManager(lazy_load=True)  # 使用懒加载避免启动时超时
 
 # 加载产品数据 (product_manager 内部会处理缓存)
 try:
@@ -74,6 +74,14 @@ except Exception as e:
             logger.exception(f"使用基本配置初始化聊天处理器也失败: {basic_init_e}")
             logger.critical("无法初始化聊天处理器，应用将无法处理聊天。请检查配置。")
             chat_handler = None  # 明确设置为 None，后续使用前需要检查
+
+@app.route('/health')
+def health_check():
+    """健康检查端点"""
+    return jsonify({
+        "status": "ok",
+        "message": "应用运行正常"
+    }), 200
 
 @app.route('/')
 def index():

@@ -10,16 +10,23 @@ logger = logging.getLogger(__name__)
 class PolicyManager:
     """Load and search policy text with semantic capabilities."""
 
-    def __init__(self, policy_file='data/policy.json', model_name='paraphrase-multilingual-MiniLM-L12-v2'):
+    def __init__(self, policy_file='data/policy.json', model_name='paraphrase-multilingual-MiniLM-L12-v2', lazy_load=True):
         self.policy_file = policy_file
         self.policy_data: Dict[str, Any] = {}
         self.policy_sentences: List[str] = []
         self.policy_embeddings = None
         self.model_name = model_name
         self.model: Optional[SentenceTransformer] = None
+        self.lazy_load = lazy_load
+        self._model_loaded = False
+
+        # 总是加载政策数据（这很快）
         self.load_policy()
-        self._load_model()
-        self._generate_embeddings()
+
+        # 根据lazy_load决定是否立即加载模型
+        if not lazy_load:
+            self._load_model()
+            self._generate_embeddings()
 
     def load_policy(self):
         """Loads policy data from the JSON file."""
@@ -53,9 +60,17 @@ class PolicyManager:
             self.policy_data = {}
             self.policy_sentences = []
 
+    def _ensure_model_loaded(self):
+        """确保模型已加载（懒加载）"""
+        if not self._model_loaded:
+            self._load_model()
+            self._generate_embeddings()
+            self._model_loaded = True
+
     def _load_model(self):
         """Loads the sentence transformer model."""
         try:
+            logger.info(f"正在加载SentenceTransformer模型 '{self.model_name}'...")
             self.model = SentenceTransformer(self.model_name)
             logger.info(f"SentenceTransformer model '{self.model_name}' loaded successfully.")
         except Exception as e:
@@ -86,6 +101,10 @@ class PolicyManager:
         Returns:
             List[str]: A list of the most relevant policy sentences.
         """
+        # 确保模型已加载（懒加载）
+        if self.lazy_load:
+            self._ensure_model_loaded()
+
         if not self.model or self.policy_embeddings is None:
             logger.warning("Semantic search not available: model or embeddings missing.")
             # Fallback to keyword search if semantic search is not available

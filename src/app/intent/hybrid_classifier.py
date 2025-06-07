@@ -4,18 +4,10 @@
 针对小数据集优化，提供更好的准确性和可解释性
 """
 
-import pandas as pd
 import re
 import logging
-from typing import Dict, List, Tuple, Optional
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, accuracy_score
-import joblib
 import os
-import json
+from typing import Dict, List, Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +19,17 @@ class HybridIntentClassifier:
     3. 最后使用关键词匹配（兜底）
     """
     
-    def __init__(self, model_path: str = "src/models/hybrid_intent_model"):
+    def __init__(self, model_path: str = "src/models/hybrid_intent_model", lazy_load: bool = True):
         self.model_path = model_path
+        self.lazy_load = lazy_load
         self.ml_model = None
+        self._model_loaded = False
         self.intent_rules = self._build_intent_rules()
         self.keyword_patterns = self._build_keyword_patterns()
-        self._load_or_train_model()
+
+        # 根据lazy_load决定是否立即加载模型
+        if not lazy_load:
+            self._load_or_train_model()
     
     def _build_intent_rules(self) -> Dict[str, List[str]]:
         """构建高精度的规则匹配模式"""
@@ -126,28 +123,52 @@ class HybridIntentClassifier:
         
         return None
     
+    def _ensure_model_loaded(self):
+        """确保模型已加载（懒加载）"""
+        if not self._model_loaded:
+            self._load_or_train_model()
+            self._model_loaded = True
+
     def _load_or_train_model(self):
         """加载或训练机器学习模型"""
         model_file = os.path.join(self.model_path, 'ml_model.joblib')
-        
+
         if os.path.exists(model_file):
             try:
+                # 懒加载joblib
+                import joblib
                 self.ml_model = joblib.load(model_file)
                 logger.info(f"已加载机器学习模型: {model_file}")
                 return
             except Exception as e:
-                logger.warning(f"加载模型失败: {e}，将重新训练")
-        
-        # 训练新模型
+                logger.warning(f"加载模型失败: {e}")
+
+        # 检查是否在生产环境
+        if os.environ.get('APP_ENV') == 'production':
+            logger.error("生产环境中不允许训练模型，ML模型将不可用")
+            self.ml_model = None
+            return
+
+        # 训练新模型（仅在非生产环境）
+        logger.info("正在训练新的机器学习模型...")
         self._train_ml_model()
     
     def _train_ml_model(self):
         """训练机器学习模型"""
         try:
+            # 懒加载重型库
+            import pandas as pd
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            from sklearn.naive_bayes import MultinomialNB
+            from sklearn.pipeline import Pipeline
+            from sklearn.model_selection import train_test_split
+            from sklearn.metrics import classification_report, accuracy_score
+            import joblib
+
             # 加载训练数据
             df = pd.read_csv('data/intent_training_data.csv')
             df['text'] = df['text'].str.strip().str.strip('"')
-            
+
             # 创建简单但有效的特征提取和分类管道
             self.ml_model = Pipeline([
                 ('tfidf', TfidfVectorizer(
@@ -196,14 +217,18 @@ class HybridIntentClassifier:
         """
         if not text or not text.strip():
             return 'unknown'
-        
+
         text = text.strip()
-        
+
         # 第一层：规则匹配
         rule_result = self._rule_based_classify(text)
         if rule_result:
             return rule_result
-        
+
+        # 确保模型已加载（懒加载）
+        if self.lazy_load:
+            self._ensure_model_loaded()
+
         # 第二层：机器学习模型
         if self.ml_model:
             try:

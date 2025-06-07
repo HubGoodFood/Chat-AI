@@ -30,9 +30,9 @@ class ChatHandler:
             cache_manager (CacheManager, optional): 缓存管理器实例
         """
         self.product_manager = product_manager
-        self.policy_manager = policy_manager or PolicyManager()
+        self.policy_manager = policy_manager or PolicyManager(lazy_load=True)  # 使用懒加载
         self.cache_manager = cache_manager or CacheManager()
-        self.intent_classifier = IntentClassifier(model_path="src/models/intent_model") # 初始化意图分类器
+        self.intent_classifier = IntentClassifier(model_path="src/models/intent_model", lazy_load=True) # 使用懒加载
         
         # 用户会话状态
         self.user_sessions = {}  # {user_id: session_data}

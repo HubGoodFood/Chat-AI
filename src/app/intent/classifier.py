@@ -1,9 +1,6 @@
-import torch
-from transformers import BertForSequenceClassification, BertTokenizer
 import logging
 import os
-from typing import List, Dict, Tuple
-from .hybrid_classifier import HybridIntentClassifier
+from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -11,41 +8,56 @@ class IntentClassifier:
     """
     意图分类器：优先使用混合分类器，BERT作为备选
     """
-    def __init__(self, model_path: str = "src/models/intent_model"):
+    def __init__(self, model_path: str = "src/models/intent_model", lazy_load: bool = True):
         """
         初始化意图分类器。
 
         Args:
             model_path (str): 存放微调后模型的目录路径。
+            lazy_load (bool): 是否使用懒加载模式
         """
         self.model_path = model_path
+        self.lazy_load = lazy_load
         self.model = None
         self.tokenizer = None
         self.label_map = None
+        self.hybrid_classifier = None
+        self._models_loaded = False
 
-        # 初始化混合分类器（主要方法）
-        try:
-            self.hybrid_classifier = HybridIntentClassifier()
-            logger.info("混合意图分类器初始化成功")
-        except Exception as e:
-            logger.warning(f"混合分类器初始化失败: {e}，将使用BERT模型")
-            self.hybrid_classifier = None
+        # 根据lazy_load决定是否立即加载模型
+        if not lazy_load:
+            self._ensure_models_loaded()
 
-        # 加载BERT模型（备选方法）
-        self._load_model()
+    def _ensure_models_loaded(self):
+        """确保模型已加载（懒加载）"""
+        if not self._models_loaded:
+            # 初始化混合分类器（主要方法）
+            try:
+                from .hybrid_classifier import HybridIntentClassifier
+                self.hybrid_classifier = HybridIntentClassifier(lazy_load=True)
+                logger.info("混合意图分类器初始化成功")
+            except Exception as e:
+                logger.warning(f"混合分类器初始化失败: {e}，将使用BERT模型")
+                self.hybrid_classifier = None
 
-    def _load_model(self):
+            # 加载BERT模型（备选方法）
+            self._load_bert_model()
+            self._models_loaded = True
+
+    def _load_bert_model(self):
         """
-        从指定路径加载模型、分词器和标签映射。
+        从指定路径加载BERT模型、分词器和标签映射。
         """
         if not os.path.exists(self.model_path) or not os.listdir(self.model_path):
-            logger.warning(f"模型路径 '{self.model_path}' 不存在或为空。")
-            logger.warning("请先运行 'train_intent_model.py' 脚本来训练和保存模型。")
-            logger.warning("在模型准备好之前，意图分类将无法工作。")
+            logger.warning(f"BERT模型路径 '{self.model_path}' 不存在或为空。")
+            logger.warning("BERT模型将不可用，将依赖混合分类器。")
             return
 
         try:
-            logger.info(f"从 '{self.model_path}' 加载模型...")
+            # 懒加载重型库
+            from transformers import BertForSequenceClassification, BertTokenizer
+
+            logger.info(f"正在加载BERT模型从 '{self.model_path}'...")
             self.model = BertForSequenceClassification.from_pretrained(self.model_path)
             self.tokenizer = BertTokenizer.from_pretrained(self.model_path)
             
@@ -60,10 +72,10 @@ class IntentClassifier:
                 self.model = None # 加载失败
 
             if self.model and self.tokenizer and self.label_map:
-                logger.info("意图分类模型加载成功。")
+                logger.info("BERT意图分类模型加载成功。")
 
         except Exception as e:
-            logger.error(f"加载意图分类模型失败: {e}", exc_info=True)
+            logger.error(f"加载BERT意图分类模型失败: {e}")
             self.model = None
             self.tokenizer = None
             self.label_map = None
@@ -78,6 +90,10 @@ class IntentClassifier:
         Returns:
             str: 预测的意图标签。如果模型未加载，则返回 'unknown'。
         """
+        # 确保模型已加载（懒加载）
+        if self.lazy_load:
+            self._ensure_models_loaded()
+
         # 优先使用混合分类器
         if self.hybrid_classifier:
             try:
@@ -93,6 +109,9 @@ class IntentClassifier:
             return 'unknown'
 
         try:
+            # 懒加载torch
+            import torch
+
             # 准备输入
             inputs = self.tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=128)
 
@@ -124,6 +143,10 @@ class IntentClassifier:
         Returns:
             Tuple[str, float]: (预测的意图, 置信度)
         """
+        # 确保模型已加载（懒加载）
+        if self.lazy_load:
+            self._ensure_models_loaded()
+
         if self.hybrid_classifier:
             try:
                 return self.hybrid_classifier.get_prediction_confidence(text)
