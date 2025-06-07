@@ -147,6 +147,10 @@ class PolicyManager:
         """Returns sentences from a specific policy section."""
         return self.policy_data.get('sections', {}).get(section_key, [])
 
+    def get_all_sections(self) -> List[str]:
+        """Returns a list of all available policy section keys."""
+        return list(self.policy_data.get('sections', {}).keys())
+
 # Example Usage (for testing)
 if __name__ == '__main__':
     # Assuming policy.json is in the same directory (or data/policy.json if run from root)

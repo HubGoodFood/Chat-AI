@@ -36,7 +36,7 @@
 
 7.  **Start Command**: 这是启动您的 Web 应用的命令。填写：
     ```bash
-    gunicorn app:app
+    gunicorn app:app --bind 0.0.0.0:$PORT
     ```
 
 8.  **Instance Type**: 对于个人项目或测试，**`Free`** 套餐通常已经足够。

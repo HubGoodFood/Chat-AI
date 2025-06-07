@@ -9,7 +9,6 @@ import csv
 import random
 from typing import Dict, List, Tuple, Optional, Any # 新增导入，用于类型提示
 import logging
-import os
 from src.config import settings as config
 from src.core.cache import CacheManager, cached
 from pypinyin import pinyin, Style

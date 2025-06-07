@@ -304,6 +304,34 @@ class ChatHandler:
            any(noun in user_input_processed for noun in identity_nouns):
             return 'identity_query'
 
+        # 3. 检查是否是政策查询 (高优先级)
+        # 添加明确的政策关键词检测，避免被误判为产品查询
+        policy_keywords = [
+            "政策", "规定", "条款", "须知", "规则", "群规",
+            "配送", "送货", "运费", "截单", "配送时间", "配送费用",
+            "付款", "支付", "venmo", "汇款", "付款方式", "支付方式",
+            "取货", "自取", "取货点", "地址", "取货地址",
+            "退款", "退货", "质量", "credit", "售后", "质量问题",
+            "理念", "宗旨", "社区", "互助", "拼台"
+        ]
+
+        # 检查是否包含政策相关关键词
+        if any(keyword in user_input_processed for keyword in policy_keywords):
+            return 'inquiry_policy'
+
+        # 检查政策相关的问句模式
+        policy_patterns = [
+            "怎么付款", "如何付款", "怎么支付", "如何支付",
+            "怎么配送", "如何配送", "配送怎么", "送货怎么",
+            "怎么取货", "如何取货", "取货怎么", "在哪取货",
+            "什么规定", "有什么规则", "群规是什么", "规定是什么",
+            "质量问题怎么", "有问题怎么", "怎么退款", "如何退款",
+            "理念是什么", "宗旨是什么", "什么理念"
+        ]
+
+        if any(pattern in user_input_processed for pattern in policy_patterns):
+            return 'inquiry_policy'
+
         # --- 模型预测：如果不是明确的规则匹配，则使用模型 ---
         if self.intent_classifier and self.intent_classifier.model:
             predicted_intent = self.intent_classifier.predict(user_input_processed)
@@ -662,36 +690,77 @@ class ChatHandler:
             logger.warning("PolicyManager or semantic model not available for policy question.")
             # Fallback to LLM if PolicyManager is not properly initialized
             return None # Let LLM handle it
-
+        
         try:
-            # 使用语义搜索查找最相关的政策句子
-            relevant_sentences = self.policy_manager.find_policy_excerpt_semantic(user_input_processed, top_k=3)
-
+            # 使用语义搜索找到相关政策条款
+            relevant_sentences = self.policy_manager.find_policy_excerpt_semantic(user_input_processed)
+            
             if relevant_sentences:
                 # 将找到的句子格式化为回复
-                response_parts = ["关于您的政策问题，以下信息可能对您有帮助："]
-                for sentence in relevant_sentences:
-                    response_parts.append(f"- {sentence}")
+                response_parts = ["📋 关于您的政策问题，以下信息可能对您有帮助："]
                 
-                # 可选：添加政策版本和更新日期
+                # 尝试识别这些句子属于哪个分类
+                all_sections = self.policy_manager.get_all_sections()
+                section_sentences = {}
+                
+                # 将句子按分类归类
+                for sentence in relevant_sentences:
+                    found_section = None
+                    for section in all_sections:
+                        section_content = self.policy_manager.get_policy_section(section)
+                        if sentence in section_content:
+                            found_section = section
+                            break
+                
+                    if found_section:
+                        if found_section not in section_sentences:
+                            section_sentences[found_section] = []
+                        section_sentences[found_section].append(sentence)
+                    else:
+                        # 未找到分类的句子
+                        if "other" not in section_sentences:
+                            section_sentences["other"] = []
+                        section_sentences["other"].append(sentence)
+            
+                # 按分类显示结果
+                section_display_names = {
+                    "mission": "📌 拼台宗旨",
+                    "group_rules": "📜 群规",
+                    "product_quality": "✅ 产品质量",
+                    "delivery": "🚚 配送政策",
+                    "payment": "💰 付款方式",
+                    "after_sale": "🔄 售后服务",
+                    "pickup": "📍 取货信息",
+                    "community": "👥 社区互助",
+                    "other": "📋 其他信息"
+                }
+                
+                for section, sentences in section_sentences.items():
+                    display_name = section_display_names.get(section, section)
+                    response_parts.append(f"\n{display_name}：")
+                    for sentence in sentences:
+                        response_parts.append(f"• {sentence}")
+                
+                # 添加政策版本和更新日期
                 version = self.policy_manager.get_policy_version()
                 last_updated = self.policy_manager.get_policy_last_updated()
                 response_parts.append(f"\n(政策版本: {version}, 最后更新: {last_updated})")
+                
+                # 添加引导性问题
+                response_parts.append("\n还有其他关于政策的问题吗？您可以具体询问配送、付款、取货等方面的细节。")
 
                 return "\n".join(response_parts)
             else:
                 # 如果语义搜索没有找到相关句子，可以尝试关键词搜索作为备用
                 keyword_excerpt = self.policy_manager.find_policy_excerpt([user_input_processed])
                 if keyword_excerpt:
-                     return f"关于您的政策问题，以下信息可能对您有帮助：\n- {keyword_excerpt}"
+                    return f"📋 关于您的政策问题，以下信息可能对您有帮助：\n• {keyword_excerpt}\n\n还有其他问题吗？"
                 else:
                     # 如果关键词搜索也失败，返回一个通用的、引导性的回复
-                    return "关于您提到的政策问题，我暂时没有找到非常具体的信息。您可以换个方式问我，比如“退货政策”或“运费”吗？"
-
+                    return "很抱歉，关于您提到的政策问题，我暂时没有找到非常具体的信息。您可以尝试询问以下方面的政策：\n• 配送政策\n• 付款方式\n• 退款规则\n• 取货信息\n• 群规\n\n或者您可以换个方式提问，我会尽力帮助您。"
         except Exception as e:
-            logger.error(f"Error handling policy question with semantic search: {e}")
-            # 如果发生异常，返回一个友好的错误提示
-            return "抱歉，在查询政策信息时遇到了一点技术问题，我们正在尽快修复！"
+            logger.error(f"处理政策问题时出错: {e}")
+            return "抱歉，处理您的政策问题时出现了技术问题。请稍后再试或换个方式提问。"
 
     def _handle_price_or_buy_fallback_recommendation(self, user_input_original: str, user_input_processed: str, identified_query_product_name: Optional[str]) -> Optional[Union[str, Dict[str, Any]]]:
         """辅助函数：当handle_price_or_buy未找到精确产品时，生成相关的产品推荐。
