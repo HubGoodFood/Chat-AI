@@ -8,7 +8,7 @@ services:
     plan: starter  # 可以使用更小的计划，因为资源需求大幅降低
     buildCommand: |
       # 使用轻量级依赖
-      pip install -r requirements_lightweight.txt
+      pip install -r requirements.txt
       
       # 安全检查
       pip-audit --desc --format=json --output=security-report.json || true
@@ -32,7 +32,7 @@ services:
       export PYTHONDONTWRITEBYTECODE=1
       
       # 启动优化的Gunicorn
-      gunicorn --config gunicorn_optimized.conf.py app:application
+      gunicorn --config gunicorn.conf.py app:application
       
     envVars:
       - key: FLASK_ENV

@@ -68,7 +68,8 @@ enable_monitoring = os.environ.get('MONITORING_ENABLED', 'true').lower() == 'tru
 performance_monitor = init_global_monitor(enable_detailed_monitoring=enable_monitoring)
 
 # --- 初始化管理器 ---
-enable_redis = os.environ.get('REDIS_ENABLED', 'true').lower() == 'true'
+# 在生产环境中默认禁用Redis，避免连接错误
+enable_redis = os.environ.get('REDIS_ENABLED', 'false').lower() == 'true'
 redis_url = os.environ.get('REDIS_URL')
 cache_manager = CacheManager(enable_redis=enable_redis, redis_url=redis_url)
 

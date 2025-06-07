@@ -109,11 +109,28 @@ if not DEEPSEEK_API_KEY:
     config_logger.warning("配置警告：未找到 DEEPSEEK_API_KEY 环境变量。DeepSeek API 将无法使用。")
 else:
     try:
-        llm_client = OpenAI(
-            api_key=DEEPSEEK_API_KEY,
-            base_url=DEEPSEEK_BASE_URL # DEEPSEEK_BASE_URL 已在文件上方定义
-        )
+        # 创建OpenAI客户端，只使用支持的参数
+        client_kwargs = {
+            'api_key': DEEPSEEK_API_KEY,
+            'base_url': DEEPSEEK_BASE_URL
+        }
+
+        # 检查OpenAI库版本兼容性
+        import openai
+        openai_version = getattr(openai, '__version__', '0.0.0')
+        config_logger.info(f"使用OpenAI库版本: {openai_version}")
+
+        llm_client = OpenAI(**client_kwargs)
         config_logger.info(f"LLM 客户端已成功配置 (config.py)，指向: {DEEPSEEK_BASE_URL}")
+    except TypeError as e:
+        config_logger.error(f"OpenAI客户端参数错误: {e}")
+        config_logger.info("尝试使用基础参数重新初始化...")
+        try:
+            llm_client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+            config_logger.info("使用基础参数成功初始化LLM客户端")
+        except Exception as e2:
+            config_logger.error(f"LLM客户端初始化完全失败: {e2}")
+            llm_client = None
     except Exception as e:
         config_logger.error(f"在 config.py 中配置 LLM 客户端失败: {e}")
         llm_client = None # 确保在失败时 llm_client 是 None
