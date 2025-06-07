@@ -2,46 +2,42 @@
 
 ## 📋 目录结构
 
-### 🚀 deployment/ - 部署配置
-包含优化后的部署配置文件，用于生产环境部署。
+### 🗄️ backup/ - 配置备份
+包含原版配置文件的备份，用于必要时回滚。
 
 **主要文件:**
-- `gunicorn_optimized.conf.py` - 优化的Gunicorn配置
-- `render_optimized.yaml` - 优化的Render部署配置
+- `requirements_original.txt` - 原版重型依赖配置
+- `README.md` - 备份说明和回滚指南
 
-## 📄 配置文件说明
+**说明:**
+- 项目根目录现在使用轻量级优化配置
+- 原版重型配置已备份到此目录
+- 查看 `backup/README.md` 了解回滚方法
 
-### 🔧 gunicorn_optimized.conf.py
-优化的Gunicorn WSGI服务器配置，针对轻量级Chat AI进行了优化：
+## 📄 当前配置说明
 
-**主要优化:**
+### 🔧 根目录配置文件
+项目根目录包含已优化的配置文件：
+
+**gunicorn.conf.py** - 优化的Gunicorn WSGI服务器配置：
 - 工作进程数量优化
-- 内存使用优化
-- 超时时间调整
+- 内存使用优化（200MB vs 2GB+）
+- 超时时间调整（30秒 vs 60秒+）
 - 日志配置优化
 - 性能监控集成
 
-**使用方法:**
-```bash
-# 使用优化配置启动
-gunicorn --config config/deployment/gunicorn_optimized.conf.py app:application
-```
-
-### 🌐 render_optimized.yaml
-优化的Render平台部署配置，专为轻量级版本设计：
-
-**主要优化:**
-- 使用轻量级依赖
+**render.yaml** - 优化的Render平台部署配置：
+- 使用轻量级依赖（50MB vs 3.5GB）
 - 优化构建命令
 - 环境变量配置
 - 健康检查配置
 - 资源限制优化
 
-**使用方法:**
-```bash
-# 复制到根目录使用
-cp config/deployment/render_optimized.yaml render.yaml
-```
+**requirements.txt** - 轻量级依赖配置：
+- 移除重型ML库（PyTorch, Transformers）
+- 添加Redis缓存支持
+- 添加性能监控工具
+- 98.6%的空间节省
 
 ## 🎯 配置对比
 
